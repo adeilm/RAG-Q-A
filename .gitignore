@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────
+# .gitignore — BIMLO Towermind
+# Secrets et artefacts à NE JAMAIS commiter
+# ─────────────────────────────────────────────────────────────
+
+# ── Secrets / clés API ──────────────────────────────────────
+**/.env
+**/.env.local
+**/.env.development
+**/.env.production
+**/.env.*.local
+# Templates conservés :
+!**/.env.example
+!**/.env.production.example
+!**/.env.frontend.example
+
+# ── Certificats TLS ─────────────────────────────────────────
+certs/
+*.crt
+*.key
+*.pem
+
+# ── Bases de données (données projets confidentielles) ──────
+*.db
+*.db-journal
+*.sqlite3
+**/data/chroma/
+**/auth_local.db
+**/bimlo_projects.db
+**/bimlo_chunks.db
+
+# ── Documents projets BIMLO réels (confidentiels) ───────────
+**/uploads/
+**/data/uploads/
+*.ifc
+
+# ── Sauvegardes ─────────────────────────────────────────────
+backups/
+*.tar.gz
+*.bak
+* - Copie.*
+
+# ── Logs ────────────────────────────────────────────────────
+*.log
+**/backend_stdout.log
+**/backend_stderr.log
+**/vite-dev.log
+**/data/logs/
+
+# ── Python ──────────────────────────────────────────────────
+**/.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+**/.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Node / Frontend ─────────────────────────────────────────
+**/node_modules/
+**/dist/
+**/.vite/
+**/.cache/
+*.local
+
+# ── Caches LLM / runtime ────────────────────────────────────
+**/news_cache.json
+**/contact_messages.log
+
+# ── IDE / OS ────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp
