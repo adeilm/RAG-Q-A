@@ -93,6 +93,10 @@ BIMLO-RAG-Copilot/
 ├── EQUIPE.md            → rôles, permissions, matrice de compétences
 ├── CONTRIBUTING.md      → workflow Git, branches, conventions
 │
+├── 00-base-amine/       → 🧱 CODE DE BASE d'Amine — point de départ du projet
+│   ├── Backend/         → API FastAPI, agents, RAG, ingestion, vérification
+│   └── Frontend/        → application React (pages, UI, client API)
+│
 ├── M1-socle-data/       → ingestion NDC/plans/IFC + base vectorielle   (Bara)
 ├── M2-repondre/         → moteur RAG, recherche hybride, citations, API (Abid)
 ├── M3-produire/         → génération trame Word + calcul Eurocode       (Houssem · Amine · Nour)
@@ -100,7 +104,7 @@ BIMLO-RAG-Copilot/
 └── M5-interface/        → front React (Q&A + formulaire) + exports      (Nour)
 ```
 
-Chaque dossier `Mx-…/` contient son propre `README.md` (périmètre, tâches, livrables, statut).
+> 🧱 **`00-base-amine/`** est le code d'Amine : c'est le socle sur lequel toute l'équipe construit. Chaque dossier `Mx-…/` est une **fiche de travail** (périmètre, tâches, livrables, statut) qui pointe vers les fichiers correspondants dans `00-base-amine/Backend/`.
 
 ---
 
@@ -124,13 +128,13 @@ Détails : [`EQUIPE.md`](./EQUIPE.md) · Contribuer : [`CONTRIBUTING.md`](./CONT
 
 ```bash
 # Backend
-cd Backend && python -m venv .venv
+cd 00-base-amine/Backend && python -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env        # remplir les clés (Groq, Cloudflare, Neo4j)
 uvicorn main:app --reload
 
 # Frontend
-cd Frontend && npm install && npm run dev
+cd 00-base-amine/Frontend && npm install && npm run dev
 ```
 
 ---
