@@ -1,0 +1,71 @@
+.simple-glow-card {
+  position: relative;
+  border-radius: var(--border-radius, 16px);
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: var(--card-bg, transparent);
+  isolation: isolate;
+}
+
+/* Glowing border — fades in on hover, fades out on leave */
+.simple-glow-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    var(--gradient-one),
+    var(--gradient-two),
+    var(--gradient-three);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.4s ease-out;
+  pointer-events: none;
+}
+
+/* Outer glow bloom */
+.simple-glow-card::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 1px var(--glow-color-40, hsl(214deg 100% 65% / 40%)),
+    0 0 8px 0  var(--glow-color-20, hsl(214deg 100% 65% / 20%)),
+    0 0 20px 2px var(--glow-color-10, hsl(214deg 100% 65% / 10%));
+  opacity: 0;
+  transition: opacity 0.3s ease-out;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* On hover: flash in then fade out automatically via animation */
+.simple-glow-card:hover::before,
+.simple-glow-card:hover::after {
+  animation: glow-flash 1.2s ease-out forwards;
+}
+
+/* On leave: instant off */
+.simple-glow-card:not(:hover)::before,
+.simple-glow-card:not(:hover)::after {
+  opacity: 0;
+  transition: opacity 0.3s ease-out;
+  animation: none;
+}
+
+@keyframes glow-flash {
+  0%   { opacity: 0; }
+  15%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.simple-glow-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}

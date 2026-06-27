@@ -1,0 +1,90 @@
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    volumes:
+      - chroma_data:/chroma/data
+    ports:
+      - "8001:8000"
+
+  # Graph Database
+  neo4j:
+    image: neo4j:latest
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 20
+      start_period: 120s
+
+  # Backend API
+  #
+  # Secrets management:
+  #   Development: uses .env file (gitignored, not committed)
+  #   Production:  use Doppler to inject secrets at runtime
+  #     doppler setup --project bimlo-copilot --config prd
+  #     docker compose --profile doppler up -d
+  #
+  api: &api
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Overrides — these must differ from .env or are path-specific
+      - CHROMA_HOST=chroma
+      - NEO4J_URI=bolt://neo4j:7687
+      - WIKI_USER_AGENT=BimloRAG/1.0
+      - HF_HOME=/root/.cache/huggingface
+      - SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface/sentence_transformers
+      - HF_HUB_DISABLE_PROGRESS_BARS=1
+      - LOGO_PATH=/app/assets/favicon.png
+      - LOGO_SVG_PATH=/app/assets/favicon.svg
+      - NEWS_CACHE_DIR=/data/news_cache
+      - DATA_DIR=/data
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://frontend
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - news_cache:/data/news_cache
+      - ../Frontend/public/favicon.png:/app/assets/favicon.png:ro
+      - ../Frontend/public/favicon.svg:/app/assets/favicon.svg:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+
+  # Doppler-powered backend (production):
+  #   Injects secrets at runtime instead of using .env file.
+  #   Requires: doppler setup --project bimlo-copilot --config prd
+  api-doppler:
+    <<: *api
+    profiles: ["doppler"]
+    env_file: []  # no .env — secrets come from Doppler
+    environment:
+      - CHROMA_HOST=chroma
+      - NEO4J_URI=bolt://neo4j:7687
+      - DATA_DIR=/data
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://frontend}
+    command: >
+      sh -c "doppler run -- python main.py"
+
+  # Frontend
+  frontend:
+    build: ../Frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+volumes:
+  chroma_data:
+  neo4j_data:
+  hf_cache:
+  news_cache:

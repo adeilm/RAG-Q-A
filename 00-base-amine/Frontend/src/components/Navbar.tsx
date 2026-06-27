@@ -1,0 +1,347 @@
+import { Link } from "react-router-dom";
+import { Shield } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import ThemeToggle from "@/components/ThemeToggle";
+import LangToggle from "@/components/LangToggle";
+import Logo from "@/components/Logo";
+import { useAuth } from "@/context/AuthContext";
+import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+
+// ── Reusable profile bubble used by Navbar, Chat, CallPage, NewsPage ─────────
+export interface ProfileUser { username: string; email: string; avatar_url?: string; display_name?: string; }
+
+export const ProfileBubble = ({
+  user,
+  onLogout,
+  onDeleteAccount,
+  align = "right",
+}: {
+  user: ProfileUser;
+  onLogout: () => void;
+  onDeleteAccount: () => void;
+  align?: "right" | "left";
+}) => {
+  const { t } = useTranslation();
+  const [open, setOpen]       = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const nameStr    = user.display_name || user.username;
+  const initial    = [...nameStr][0]?.toUpperCase() ?? "?";
+  const hasPfp     = !!user.avatar_url;
+  const displayName = nameStr;
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      {/* Avatar button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={user.username}
+        style={{
+          width: 34, height: 34, borderRadius: "50%",
+          background: hasPfp ? "transparent" : open
+            ? "linear-gradient(135deg,#6366f1,#3b82f6)"
+            : "linear-gradient(135deg,#3b82f6,#6366f1)",
+          border: open ? "2px solid rgba(99,102,241,0.6)" : "2px solid rgba(99,102,241,0.25)",
+          cursor: "pointer", color: "#fff",
+          fontSize: 13, fontWeight: 700,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          overflow: "hidden",
+          boxShadow: open
+            ? "0 0 0 3px rgba(99,102,241,0.2), 0 8px 24px rgba(99,102,241,0.3)"
+            : "0 0 0 2px rgba(99,102,241,0.15)",
+          transition: "all 0.18s cubic-bezier(0.4,0,0.2,1)",
+          padding: 0,
+        }}
+      >
+        {hasPfp ? (
+          <img
+            src={user.avatar_url}
+            alt={user.username}
+            referrerPolicy="no-referrer"
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          />
+        ) : initial}
+      </button>
+
+      {/* Dropdown */}
+      <div
+        style={{
+          position: "absolute",
+          top: "calc(100% + 10px)",
+          insetInlineEnd: 0,
+          minWidth: 210,
+          background: "hsl(var(--card))",
+          border: "1px solid hsl(var(--border))",
+          borderRadius: 16,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06)",
+          zIndex: 200,
+          overflow: "hidden",
+          opacity: open ? 1 : 0,
+          transform: open ? "scale(1) translateY(0)" : "scale(0.94) translateY(-6px)",
+          pointerEvents: open ? "auto" : "none",
+          transition: "opacity 0.18s ease, transform 0.18s cubic-bezier(0.4,0,0.2,1)",
+        }}
+      >
+        {/* Header band */}
+        <div style={{
+          padding: "14px 16px 12px",
+          background: "linear-gradient(135deg, rgba(59,130,246,0.12), rgba(99,102,241,0.08))",
+          borderBottom: "1px solid rgba(99,102,241,0.12)",
+        }}>
+          {/* Avatar large */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 38, height: 38, borderRadius: "50%",
+              background: hasPfp ? "transparent" : "linear-gradient(135deg,#3b82f6,#6366f1)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 15, fontWeight: 800, color: "#fff",
+              boxShadow: "0 4px 12px rgba(99,102,241,0.35)",
+              flexShrink: 0, overflow: "hidden",
+            }}>
+              {hasPfp ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.username}
+                  referrerPolicy="no-referrer"
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                />
+              ) : initial}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "hsl(var(--foreground))", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {displayName}
+              </p>
+              <p style={{ margin: "2px 0 0", fontSize: 11, color: "rgba(148,163,184,0.8)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
+                {user.email}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ padding: "6px 0 6px" }}>
+          <button
+            onClick={() => { setOpen(false); onLogout(); }}
+            style={{
+              width: "100%", textAlign: "left",
+              padding: "9px 16px",
+              background: "transparent", border: "none", cursor: "pointer",
+              fontSize: 13, fontWeight: 500,
+              color: "#f87171",
+              display: "flex", alignItems: "center", gap: 8,
+              transition: "background 0.12s",
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.08)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            {t("auth.logout")}
+          </button>
+
+          {/* Divider */}
+          <div style={{ height: "1px", background: "hsl(var(--border))", margin: "4px 16px" }} />
+
+          {/* Delete account — two-step confirm */}
+          {!confirm ? (
+            <button
+              onClick={() => setConfirm(true)}
+              style={{
+                width: "100%", textAlign: "left",
+                padding: "9px 16px",
+                background: "transparent", border: "none", cursor: "pointer",
+                fontSize: 13, fontWeight: 500,
+                color: "hsl(var(--muted-foreground))",
+                display: "flex", alignItems: "center", gap: 8,
+                transition: "background 0.12s, color 0.12s",
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLButtonElement).style.background = "rgba(248,113,113,0.06)";
+                (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                (e.currentTarget as HTMLButtonElement).style.color = "hsl(var(--muted-foreground))";
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+              {t("auth.delete_account")}
+            </button>
+          ) : (
+            <div style={{ padding: "10px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <p style={{ margin: 0, fontSize: 12, color: "#f87171", fontWeight: 600 }}>
+                {t("auth.delete_confirm")}
+              </p>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  onClick={() => { setConfirm(false); setOpen(false); onDeleteAccount(); }}
+                  style={{
+                    flex: 1, padding: "7px 0", borderRadius: 8, border: "none",
+                    background: "#f87171", color: "#fff",
+                    fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  {t("common.confirm_delete")}
+                </button>
+                <button
+                  onClick={() => setConfirm(false)}
+                  style={{
+                    flex: 1, padding: "7px 0", borderRadius: 8,
+                    border: "1px solid hsl(var(--border))",
+                    background: "transparent", color: "hsl(var(--foreground))",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const scrollTo = (id: string, extraOffset = 0) => (e: React.MouseEvent) => {
+  e.preventDefault();
+  const el = document.getElementById(id);
+  if (el) {
+    const pos = el.getBoundingClientRect().top + window.pageYOffset - 64 + extraOffset;
+    window.scrollTo({ top: pos, behavior: 'smooth' });
+  }
+};
+
+const Navbar = () => {
+  const { t } = useTranslation();
+  const { currentUser, showAuthModal, logout, setCurrentUser } = useAuth();
+
+  const deleteAccount = async () => {
+    if (!currentUser?.token) return;
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/auth/delete-account`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${currentUser.token}` },
+      });
+    } catch { /* ignore — wipe local state regardless */ }
+    setCurrentUser(null);
+  };
+
+  return (
+    <nav className="fixed top-0 left-0 right-0 z-50" style={{
+      backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)',
+      backgroundColor: 'hsl(var(--background) / 0.55)',
+      borderBottom: '1px solid hsl(var(--border) / 0.3)',
+      boxShadow: '0 1px 4px hsl(var(--border) / 0.4)',
+    }}>
+      <div className="container mx-auto flex items-center justify-between h-16 px-6">
+        <Link to="/" className="flex items-center gap-2">
+          <Logo className="h-8 w-8" />
+            <span className="font-heading text-xl font-bold text-foreground">
+            {t("nav.title")}
+          </span>
+        </Link>
+
+        <div className="hidden md:flex items-center gap-8">
+          <a href="#trending" onClick={scrollTo('trending', 0)}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            {t("nav.trending")}
+          </a>
+          <a href="#features" onClick={scrollTo('features', 0)}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            {t("nav.features")}
+          </a>
+          <a href="#how-it-works" onClick={scrollTo('how-it-works', 0)}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            {t("nav.how_it_works")}
+          </a>
+          <a href="#contact" onClick={scrollTo('contact', 0)}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            {t("nav.contact")}
+          </a>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {currentUser ? (
+            <>
+              {currentUser.role === "admin" && (
+                <Link
+                  to="/admin"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    fontSize: 12, fontWeight: 600,
+                    padding: "5px 12px", borderRadius: 8,
+                    color: "hsl(var(--muted-foreground))",
+                    background: "transparent",
+                    border: "1px solid hsl(var(--border))",
+                    textDecoration: "none",
+                    transition: "color 0.15s, border-color 0.15s, background 0.15s",
+                  }}
+                  onMouseEnter={e => {
+                    const el = e.currentTarget as HTMLAnchorElement;
+                    el.style.color = "hsl(var(--foreground))";
+                    el.style.borderColor = "rgba(124,58,237,0.4)";
+                    el.style.background = "rgba(124,58,237,0.06)";
+                  }}
+                  onMouseLeave={e => {
+                    const el = e.currentTarget as HTMLAnchorElement;
+                    el.style.color = "hsl(var(--muted-foreground))";
+                    el.style.borderColor = "hsl(var(--border))";
+                    el.style.background = "transparent";
+                  }}
+                >
+                  <Shield size={11} />
+                  {t("nav.dashboard")}
+                </Link>
+              )}
+              <ProfileBubble user={currentUser} onLogout={logout} onDeleteAccount={deleteAccount} align="right" />
+              <LangToggle />
+              <ThemeToggle />
+            </>
+          ) : (
+            /* ── Guest: Log in + Launch Copilot + Theme ── */
+            <>
+              <button
+                onClick={() => showAuthModal()}
+                style={{
+                  fontSize: 13, fontWeight: 600, padding: "6px 14px", height: 36,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  borderRadius: 8, border: "1px solid rgba(96,165,250,0.35)",
+                  background: "rgba(96,165,250,0.08)", color: "#60a5fa",
+                  cursor: "pointer", transition: "background 0.15s",
+                }}
+                onMouseEnter={e => { (e.currentTarget).style.background = "rgba(96,165,250,0.18)"; }}
+                onMouseLeave={e => { (e.currentTarget).style.background = "rgba(96,165,250,0.08)"; }}
+              >
+                {t("auth.login")}
+              </button>
+              <Link to="/chat">
+                <Button size="sm" className="h-9 px-4 py-[6px] rounded-[8px] bg-hero-gradient text-primary-foreground shadow-blue hover:opacity-90 transition-opacity font-heading font-semibold">
+                  {t("nav.launch_copilot")}
+                </Button>
+              </Link>
+              <LangToggle />
+              <ThemeToggle />
+            </>
+          )}
+        </div>
+      </div>
+    </nav>
+  );
+};
+
+export default Navbar;

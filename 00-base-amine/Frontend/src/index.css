@@ -1,0 +1,147 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Alexandria:wght@400;500;600;700&display=swap');
+@import './scrollbar.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 218 35% 96%;
+    --foreground: 220 30% 16%;
+
+    --card: 218 30% 98%;
+    --card-foreground: 220 30% 16%;
+
+    --popover: 218 30% 98%;
+    --popover-foreground: 220 30% 16%;
+
+    --primary: 217 85% 54%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 45% 91%;
+    --secondary-foreground: 220 30% 20%;
+
+    --muted: 217 30% 92%;
+    --muted-foreground: 217 18% 46%;
+
+    --accent: 217 75% 92%;
+    --accent-foreground: 217 80% 36%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 217 25% 84%;
+    --input: 217 25% 86%;
+    --ring: 217 85% 54%;
+
+    --radius: 0.75rem;
+
+    --hero-gradient: linear-gradient(135deg, hsl(217, 88%, 52%) 0%, hsl(225, 92%, 62%) 100%);
+    --surface-blue: 217 88% 96%;
+    --blue-glow: 217 88% 52%;
+
+    --sidebar-background: 218 30% 94%;
+    --sidebar-foreground: 220 30% 16%;
+    --sidebar-primary: 217 85% 54%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 75% 92%;
+    --sidebar-accent-foreground: 217 80% 36%;
+    --sidebar-border: 217 25% 84%;
+    --sidebar-ring: 217 85% 54%;
+
+    --font-heading: 'Montserrat', sans-serif;
+    --font-body: 'Inter', sans-serif;
+  }
+
+  .dark {
+    --background: 217 45% 5%;
+    --foreground: 210 45% 98%;
+    --card: 217 45% 7%;
+    --card-foreground: 210 45% 98%;
+    --popover: 217 45% 7%;
+    --popover-foreground: 210 45% 98%;
+    --primary: 217 88% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217 38% 12%;
+    --secondary-foreground: 210 45% 98%;
+    --muted: 217 28% 12%;
+    --muted-foreground: 217 16% 58%;
+    --accent: 217 58% 14%;
+    --accent-foreground: 217 88% 72%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 28% 16%;
+    --input: 217 28% 16%;
+    --ring: 217 88% 60%;
+    --sidebar-background: 217 45% 7%;
+    --sidebar-foreground: 210 45% 98%;
+    --sidebar-primary: 217 88% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 217 58% 14%;
+    --sidebar-accent-foreground: 217 88% 72%;
+    --sidebar-border: 217 28% 16%;
+    --sidebar-ring: 217 88% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+  html {
+    transition: background-color 0.15s ease;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+  /* Arabic font override — Alexandria for everything */
+  [dir="rtl"] {
+    --font-heading: 'Alexandria', 'Montserrat', sans-serif;
+    --font-body: 'Alexandria', 'Inter', sans-serif;
+  }
+  [dir="rtl"] body,
+  [dir="rtl"] h1, [dir="rtl"] h2, [dir="rtl"] h3, [dir="rtl"] h4, [dir="rtl"] h5, [dir="rtl"] h6 {
+    font-family: var(--font-heading);
+  }
+  /* Boost bold weight for Arabic — Alexandria's 700 is visually lighter */
+  [dir="rtl"] .font-bold { font-weight: 800; }
+  [dir="rtl"] .font-extrabold { font-weight: 900; }
+}
+
+@layer utilities {
+  .text-gradient-blue {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--hero-gradient);
+  }
+  .bg-hero-gradient {
+    background: var(--hero-gradient);
+  }
+  .shadow-blue {
+    box-shadow: 0 8px 32px -8px hsl(var(--blue-glow) / 0.3);
+  }
+  .glass-surface {
+    @apply bg-card/80 backdrop-blur-lg border border-border/50;
+  }
+}
+
+@keyframes highlight-fade {
+  0%   { background-color: hsl(var(--primary) / 0.55); }
+  40%  { background-color: hsl(var(--primary) / 0.45); }
+  100% { background-color: hsl(var(--primary) / 0.25); }
+}
+
+.doc-highlight {
+  border-radius: 2px;
+  padding: 1px 0;
+  /* will be toggled on via .doc-highlight-active */
+}
+
+.doc-highlight-active {
+  animation: highlight-fade 3.5s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+}

@@ -1,0 +1,1776 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import {
+  ArrowLeft, RefreshCw, ExternalLink, Zap,
+  Radio, Cable, Scale, HardHat, Newspaper, Sun, Moon, Loader2,
+  RefreshCcw, X, MessageSquare, Copy, Check, ThumbsUp, ThumbsDown, RotateCcw,
+  Plus, ChevronLeft, Trash2, History,
+} from "lucide-react";
+import TypewriterText from "@/components/TypewriterText";
+import CardNav from "@/components/CardNav";
+import { useAuth } from "@/context/AuthContext";
+import { ProfileBubble } from "@/components/Navbar";
+
+/** Detect if text contains Arabic/RTL characters */
+const ARABIC_RE = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
+const isRTLText = (text: string) => ARABIC_RE.test(text);
+
+// ── Config ─────────────────────────────────────────────────────────────────
+
+const API_BASE  = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const PAGE_SIZE = 10;
+
+// ── Category config ─────────────────────────────────────────────────────────
+
+const CATEGORY_META: Record<string, { label: string; Icon: React.ElementType; color: string; lightColor: string }> = {
+  "5G":           { label: "5G",           Icon: Radio,     color: "#3b9eff", lightColor: "#1a6fd4" },
+  "Fiber":        { label: "Fiber",        Icon: Cable,     color: "#34d399", lightColor: "#0d7a52" },
+  "Regulation":   { label: "Regulation",   Icon: Scale,     color: "#fbbf24", lightColor: "#92650a" },
+  "Construction": { label: "Construction", Icon: HardHat,   color: "#a78bfa", lightColor: "#5b34c4" },
+  "General":        { label: "General",      Icon: Newspaper, color: "#94a3b8", lightColor: "#475569" },
+  "BIM":            { label: "BIM",          Icon: Zap,       color: "#f472b6", lightColor: "#be185d" },
+  "Digital Twin":   { label: "Digital Twin", Icon: Sun,       color: "#22d3ee", lightColor: "#0e7490" },
+  "AI Construction":{ label: "AI",           Icon: Zap,       color: "#fb923c", lightColor: "#c2410c" },
+};
+
+// Returns the right color variant based on theme — darker on light bg for contrast
+function catColor(meta: typeof CATEGORY_META[string], theme: "light" | "dark") {
+  return theme === "dark" ? meta.color : meta.lightColor;
+}
+
+const CATEGORIES = ["All", "5G", "Fiber", "Regulation", "Construction", "General", "BIM", "Digital Twin", "AI Construction"] as const;
+const ALL_FILTERS = CATEGORIES;
+
+const FALLBACK_GRADIENTS: Record<string, string> = {
+  "5G":           "linear-gradient(135deg, #0f2540 0%, #1a4a7a 100%)",
+  "Fiber":        "linear-gradient(135deg, #0d2a1f 0%, #1a5c3a 100%)",
+  "Regulation":   "linear-gradient(135deg, #2a1f06 0%, #5c440a 100%)",
+  "Construction": "linear-gradient(135deg, #1f0d2a 0%, #3d1a5c 100%)",
+  "General":         "linear-gradient(135deg, #1a1a2e 0%, #2d2d4e 100%)",
+  "BIM":             "linear-gradient(135deg, #2a0a1f 0%, #6d1a4a 100%)",
+  "Digital Twin":    "linear-gradient(135deg, #042a2e 0%, #0a5c6e 100%)",
+  "AI Construction": "linear-gradient(135deg, #2a1200 0%, #7a3500 100%)",
+};
+
+// ── Card size variants ──────────────────────────────────────────────────────
+
+type CardSize = "normal" | "wide" | "tall" | "featured";
+
+const SIZE_PATTERN: CardSize[] = [
+  "featured", "normal", "tall", "normal",
+  "wide",     "normal", "tall", "normal",
+];
+
+function getSize(index: number): CardSize {
+  return SIZE_PATTERN[index % SIZE_PATTERN.length];
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function timeAgo(iso: string) {
+  if (!iso) return "recently";
+  const ts = new Date(iso).getTime();
+  if (isNaN(ts)) return "recently";
+  const diff = Date.now() - ts;
+  if (diff < 0) return "just now";
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d <= 7) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function normalize(item: any) {
+  return {
+    ...item,
+    articleUrl:  item.article_url  ?? item.articleUrl  ?? "#",
+    imageUrl:    item.image_url    ?? item.imageUrl    ?? null,
+    aiImpact:    item.ai_impact    ?? item.aiImpact    ?? "",
+    sourceUrl:   item.source_url   ?? item.sourceUrl   ?? "#",
+    publishedAt: item.published_at ?? item.publishedAt ?? "",
+  };
+}
+
+// ── Thumbnail fetcher ────────────────────────────────────────────────────────
+// Fetches the OG/twitter image from an article URL via a lightweight
+// HEAD-then-parse approach using a CORS proxy. Falls back silently.
+// Results are cached in a module-level Map so re-renders don't re-fetch.
+const _thumbCache = new Map<string, string | null>();
+const _thumbInFlight = new Set<string>();
+
+async function fetchThumbnail(articleUrl: string): Promise<string | null> {
+  if (!articleUrl || articleUrl === "#") return null;
+  if (_thumbCache.has(articleUrl)) return _thumbCache.get(articleUrl)!;
+  if (_thumbInFlight.has(articleUrl)) return null;
+  _thumbInFlight.add(articleUrl);
+  try {
+    // Use our own backend proxy — server-side og:image fetch, no CORS issues,
+    // no third-party rate limits, and the server already has browser headers set.
+    const proxy = `${API_BASE}/api/news/thumb?url=${encodeURIComponent(articleUrl)}`;
+    const res   = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) { _thumbCache.set(articleUrl, null); return null; }
+    const data = await res.json() as { image_url: string | null };
+    const url  = data.image_url ?? null;
+    _thumbCache.set(articleUrl, url);
+    return url;
+  } catch {
+    _thumbCache.set(articleUrl, null);
+    return null;
+  } finally {
+    _thumbInFlight.delete(articleUrl);
+  }
+}
+
+// Hook used per-card: resolves thumbnail lazily and returns it
+function useThumbnail(articleUrl: string | undefined, existingImageUrl: string | null | undefined) {
+  const [thumb, setThumb] = useState<string | null>(existingImageUrl ?? null);
+  useEffect(() => {
+    if (existingImageUrl) { setThumb(existingImageUrl); return; }
+    if (!articleUrl || articleUrl === "#") return;
+    // Check cache synchronously first
+    if (_thumbCache.has(articleUrl)) { setThumb(_thumbCache.get(articleUrl) ?? null); return; }
+    let cancelled = false;
+    fetchThumbnail(articleUrl).then(url => { if (!cancelled) setThumb(url); });
+    return () => { cancelled = true; };
+  }, [articleUrl, existingImageUrl]);
+  return thumb;
+}
+
+// ── Stale article guard ──────────────────────────────────────────────────────
+// Articles with no valid published_at, or older than MAX_ARTICLE_AGE_DAYS,
+// are considered stale cache artefacts and filtered out of the feed.
+const MAX_ARTICLE_AGE_DAYS = 4;
+
+function isArticleFresh(publishedAt: string): boolean {
+  if (!publishedAt) return false;                         // no timestamp → stale
+  const ts = new Date(publishedAt).getTime();
+  if (isNaN(ts)) return false;                           // unparseable → stale
+  const ageMs = Date.now() - ts;
+  if (ageMs < 0) return true;                            // future-dated → keep
+  return ageMs < MAX_ARTICLE_AGE_DAYS * 24 * 60 * 60 * 1000;
+}
+
+// ── Static overlay gradient ──────────────────────────────────────────────────
+const overlayGradient =
+  "linear-gradient(to top,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.40) 55%,rgba(0,0,0,0.08) 100%)";
+
+// ── Markdown renderer for chat messages ─────────────────────────────────────
+// Converts common LLM markdown to JSX so text doesn't overflow the chat bubble.
+
+function renderMarkdown(text: string, dark: boolean): React.ReactNode {
+  const textColor     = dark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.78)";
+  const mutedColor    = dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)";
+  const codeColor     = dark ? "#7dd3fc"                : "#0369a1";
+  const codeBg        = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+  const hrColor       = dark ? "rgba(255,255,255,0.1)"  : "rgba(0,0,0,0.1)";
+
+  // Split into lines for block-level processing
+  const lines = text.split("\n");
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+
+  const inlineFormat = (raw: string, key: string | number): React.ReactNode => {
+    // Handle inline code, bold, italic in one pass
+    const parts: React.ReactNode[] = [];
+    const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_)/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    let idx = 0;
+    while ((m = pattern.exec(raw)) !== null) {
+      if (m.index > last) parts.push(raw.slice(last, m.index));
+      const token = m[0];
+      if (token.startsWith("`")) {
+        parts.push(
+          <code key={`${key}-c${idx}`} style={{
+            fontFamily: "monospace", fontSize: "0.88em",
+            background: codeBg, color: codeColor,
+            borderRadius: 4, padding: "0.05em 0.32em",
+          }}>{token.slice(1, -1)}</code>
+        );
+      } else if (token.startsWith("**") || token.startsWith("__")) {
+        parts.push(<strong key={`${key}-b${idx}`} style={{ fontWeight: 700, color: textColor }}>{token.slice(2, -2)}</strong>);
+      } else {
+        parts.push(<em key={`${key}-i${idx}`} style={{ fontStyle: "italic" }}>{token.slice(1, -1)}</em>);
+      }
+      last = m.index + token.length;
+      idx++;
+    }
+    if (last < raw.length) parts.push(raw.slice(last));
+    return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Blank line → small spacer (avoid double-spacing)
+    if (line.trim() === "") {
+      // only add spacer if previous node wasn't already a spacer
+      const last = nodes[nodes.length - 1];
+      if (last && (last as any)?.props?.["data-spacer"] !== "1") {
+        nodes.push(<div key={`sp-${i}`} data-spacer="1" style={{ height: "0.35em" }} />);
+      }
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^---+$/.test(line.trim()) || /^\*\*\*+$/.test(line.trim())) {
+      nodes.push(<hr key={`hr-${i}`} style={{ border: "none", borderTop: `1px solid ${hrColor}`, margin: "0.45em 0" }} />);
+      i++;
+      continue;
+    }
+
+    // Headings (###, ##, #)
+    const hMatch = line.match(/^(#{1,3})\s+(.+)/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      const size  = level === 1 ? "0.9rem" : level === 2 ? "0.82rem" : "0.78rem";
+      nodes.push(
+        <div key={`h-${i}`} style={{
+          fontSize: size, fontWeight: 700, color: textColor,
+          marginTop: "0.55em", marginBottom: "0.2em", lineHeight: 1.3,
+          wordBreak: "break-word",
+        }}>
+          {inlineFormat(hMatch[2], `h-${i}`)}
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    // Bullet list item (-, *, •)
+    if (/^[\-\*•]\s+/.test(line)) {
+      // Collect consecutive bullet lines
+      const items: string[] = [];
+      while (i < lines.length && /^[\-\*•]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^[\-\*•]\s+/, ""));
+        i++;
+      }
+      nodes.push(
+        <ul key={`ul-${i}`} style={{ margin: "0.25em 0", paddingLeft: "1.1em", listStyle: "none" }}>
+          {items.map((item, j) => (
+            <li key={j} style={{
+              display: "flex", alignItems: "flex-start", gap: "0.38em",
+              marginBottom: j < items.length - 1 ? "0.22em" : 0,
+              lineHeight: 1.5, wordBreak: "break-word",
+            }}>
+              <span style={{ color: "#3b9eff", fontSize: "0.8em", marginTop: "0.28em", flexShrink: 0 }}>●</span>
+              <span>{inlineFormat(item, `ul-${i}-${j}`)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    // Numbered list item
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      const num = 1;
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s+/, ""));
+        i++;
+      }
+      nodes.push(
+        <ol key={`ol-${i}`} style={{ margin: "0.25em 0", paddingLeft: "0.2em", listStyle: "none" }}>
+          {items.map((item, j) => (
+            <li key={j} style={{
+              display: "flex", alignItems: "flex-start", gap: "0.38em",
+              marginBottom: j < items.length - 1 ? "0.22em" : 0,
+              lineHeight: 1.5, wordBreak: "break-word",
+            }}>
+              <span style={{ color: mutedColor, fontSize: "0.78em", fontWeight: 700, marginTop: "0.22em", flexShrink: 0, minWidth: "1.2em" }}>{j + num}.</span>
+              <span>{inlineFormat(item, `ol-${i}-${j}`)}</span>
+            </li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    // Regular paragraph line — wrap with word-break
+    nodes.push(
+      <div key={`p-${i}`} style={{ lineHeight: 1.55, wordBreak: "break-word", overflowWrap: "break-word" }}>
+        {inlineFormat(line, `p-${i}`)}
+      </div>
+    );
+    i++;
+  }
+
+  return <>{nodes}</>;
+}
+
+// ── IntersectionObserver infinite scroll ────────────────────────────────────
+
+function useInfiniteScroll(onLoadMore: () => void, enabled: boolean) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => { if (entries[0].isIntersecting) onLoadMore(); },
+      { rootMargin: "0px 0px 300px 0px", threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, onLoadMore]);
+  return sentinelRef;
+}
+
+// ── Chat types ───────────────────────────────────────────────────────────────
+
+interface PinnedArticle {
+  id: string;
+  title: string;
+  category: string;
+  source: string;
+  aiImpact?: string;
+  rawSummary?: string;
+  articleUrl?: string;
+  imageUrl?: string | null;
+}
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  rawAnswer?: string;
+  loading?: boolean;
+  timestamp: Date;
+  pinnedArticles?: PinnedArticle[];
+}
+
+// ── Grid News Card ───────────────────────────────────────────────────────────
+
+function NewsCard({ item, revealed, theme, size, onPin, isPinned, chatOpen }: {
+  item: any;
+  revealed: boolean;
+  theme: "light" | "dark";
+  size: CardSize;
+  onPin: (item: any) => void;
+  isPinned: boolean;
+  chatOpen: boolean;
+}) {
+  const { t } = useTranslation();
+  const meta  = CATEGORY_META[item.category] ?? CATEGORY_META["General"];
+  const href  = item.articleUrl && item.articleUrl !== "#" ? item.articleUrl : item.sourceUrl;
+  const [imgError, setImgError] = useState(false);
+  // Resolve thumbnail: use stored imageUrl or lazily fetch OG image from article
+  const resolvedImage = useThumbnail(item.articleUrl, item.imageUrl);
+  // Clearbit logos should be displayed as a small centred badge, not a cover photo
+  const isClearbit  = !!(resolvedImage && resolvedImage.includes("logo.clearbit.com"));
+  const hasImage    = resolvedImage && !imgError && !isClearbit;
+  const hasLogo     = resolvedImage && !imgError && isClearbit;
+  const hasAiImpact = !!item.aiImpact;
+  const logoSrc     = "/favicon.svg";
+
+  // Collapse wide/featured spans when chat pushes grid to 3 cols to avoid overflow
+  const effectiveSize: CardSize = chatOpen && (size === "wide" || size === "featured") ? "normal" : size;
+  const isFeatured  = effectiveSize === "featured";
+  const isWide      = effectiveSize === "wide";
+  const isTall      = effectiveSize === "tall" || isFeatured;
+  const logoSize    = isFeatured ? 96 : isTall ? 80 : isWide ? 72 : 60;
+  const colSpan     = (effectiveSize === "wide" || effectiveSize === "featured") ? 2 : 1;
+  const rowSpan     = (effectiveSize === "tall" || effectiveSize === "featured") ? 2 : 1;
+  const titleSize   = isFeatured ? "1.08rem" : isWide ? "0.92rem" : "0.82rem";
+  const titleClamp  = isFeatured ? 4 : isTall ? 4 : isWide ? 2 : 3;
+
+  return (
+    <div
+      style={{
+        gridColumn: `span ${colSpan}`,
+        gridRow:    `span ${rowSpan}`,
+        position: "relative",
+        borderRadius: 14, overflow: "hidden",
+        cursor: "default",
+        opacity: revealed ? 1 : 0,
+        transform: revealed ? "translateY(0) scale(1)" : "translateY(20px) scale(0.97)",
+        transition: "opacity 0.38s ease, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease",
+        border: isPinned
+          ? `1.5px solid ${theme === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.3)"}`
+          : `1px solid ${theme === "dark" ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"}`,
+        boxShadow: isPinned ? `0 0 0 2px ${theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"}` : "none",
+      }}
+      onMouseEnter={e => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.transform = "translateY(-4px) scale(1.025)";
+        el.style.zIndex    = "10";
+        el.style.boxShadow = isPinned
+          ? `0 0 0 2px ${theme === "dark" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.2)"}, 0 20px 56px rgba(0,0,0,0.45)`
+          : "0 20px 56px rgba(0,0,0,0.45)";
+        const img = el.querySelector("img[alt='']") as HTMLElement;
+        if (img) img.style.transform = "scale(1.1)";
+        const ov = el.querySelector(".card-ov") as HTMLElement;
+        if (ov) ov.style.background = "linear-gradient(to top,rgba(0,0,0,0.95) 0%,rgba(0,0,0,0.55) 50%,rgba(0,0,0,0.15) 100%)";
+      }}
+      onMouseLeave={e => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.transform = "translateY(0) scale(1)";
+        el.style.zIndex    = "1";
+        el.style.boxShadow = isPinned ? `0 0 0 2px ${theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"}` : "none";
+        const img = el.querySelector("img[alt='']") as HTMLElement;
+        if (img) img.style.transform = "scale(1)";
+        const ov = el.querySelector(".card-ov") as HTMLElement;
+        if (ov) ov.style.background = overlayGradient;
+      }}
+    >
+      {/* Background */}
+      {hasImage
+        ? <img
+            src={resolvedImage ?? undefined} alt=""
+            onError={() => setImgError(true)}
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", transition: "transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1)", transformOrigin: "center center" }}
+          />
+        : <div style={{ position: "absolute", inset: 0, background: FALLBACK_GRADIENTS[item.category] ?? FALLBACK_GRADIENTS["General"], display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {hasLogo
+              ? <img
+                  src={resolvedImage ?? undefined} alt=""
+                  onError={() => setImgError(true)}
+                  style={{
+                    width:  isFeatured ? 80 : isTall ? 64 : isWide ? 60 : 48,
+                    height: isFeatured ? 80 : isTall ? 64 : isWide ? 60 : 48,
+                    objectFit: "contain",
+                    opacity: 0.90,
+                    borderRadius: 12,
+                    filter: "brightness(0) invert(1) drop-shadow(0 2px 12px rgba(0,0,0,0.6))",
+                    userSelect: "none",
+                  }}
+                />
+              : <img
+                  src={logoSrc}
+                  alt=""
+                  style={{
+                    width:  logoSize,
+                    height: logoSize,
+                    objectFit: "contain",
+                    opacity: 0.22,
+                    filter: "brightness(0) invert(1) drop-shadow(0 2px 24px rgba(0,0,0,0.5))",
+                    userSelect: "none",
+                    pointerEvents: "none",
+                  }}
+                />
+            }
+          </div>
+      }
+
+      {/* Overlay */}
+      <div className="card-ov" style={{ position: "absolute", inset: 0, background: overlayGradient, transition: "background 0.22s ease" }} />
+
+      {/* Category badge */}
+      <div style={{
+        position: "absolute", top: 12, insetInlineStart: 12,
+        display: "inline-flex", alignItems: "center", gap: "0.28rem",
+        fontSize: "0.62rem", fontWeight: 700, color: "#fff",
+        background: "rgba(0,0,0,0.45)", borderRadius: 999,
+        padding: "0.18rem 0.55rem", backdropFilter: "blur(6px)",
+        letterSpacing: "0.02em",
+      }}>
+        <meta.Icon size={9} />{meta.label}
+      </div>
+
+      {/* Top-right: pin + external link */}
+      <div style={{ position: "absolute", top: 10, insetInlineEnd: 10, display: "flex", gap: "0.35rem", alignItems: "center" }}>
+        <button
+          onClick={() => onPin(item)}
+          title={isPinned ? t("news.remove_from_chat") : t("news.mention_in_chat")}
+          style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 24, height: 24, borderRadius: 6,
+            background: isPinned ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.5)",
+            backdropFilter: "blur(8px)",
+            border: isPinned ? "1px solid rgba(255,255,255,0.5)" : "1px solid rgba(255,255,255,0.18)",
+            color: "#fff", cursor: "pointer",
+            transition: "all 0.15s",
+          }}
+        >
+          {isPinned ? <X size={10} strokeWidth={2.5} /> : <MessageSquare size={10} strokeWidth={2} />}
+        </button>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          style={{ display: "flex" }}
+        >
+          <ExternalLink size={12} style={{ color: "rgba(255,255,255,0.45)" }} />
+        </a>
+      </div>
+
+      {/* Featured accent bar */}
+      {isFeatured && (
+        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, rgba(255,255,255,0.25), transparent)" }} />
+      )}
+
+      {/* Content */}
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: isFeatured ? "1.2rem 1.1rem" : "0.85rem 0.95rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.38rem" }}>
+          <span style={{ fontSize: "0.6rem", color: "rgba(255,255,255,0.55)", fontWeight: 600 }}>{item.source}</span>
+          <span style={{ fontSize: "0.6rem", color: "rgba(255,255,255,0.3)" }}>·</span>
+          <span style={{ fontSize: "0.6rem", color: "rgba(255,255,255,0.38)" }}>{timeAgo(item.publishedAt)}</span>
+        </div>
+        <h3 style={{
+          margin: 0, fontSize: titleSize, fontWeight: 700, color: "#fff", lineHeight: 1.35,
+          display: "-webkit-box", WebkitLineClamp: titleClamp,
+          WebkitBoxOrient: "vertical" as const, overflow: "hidden",
+        }}>
+          {item.title}
+        </h3>
+        {hasAiImpact && (isFeatured || isTall) && (
+          <p style={{
+            margin: "0.48rem 0 0", fontSize: isFeatured ? "0.74rem" : "0.68rem",
+            color: "rgba(255,255,255,0.6)", lineHeight: 1.5,
+            display: "-webkit-box", WebkitLineClamp: isFeatured ? 3 : 2,
+            WebkitBoxOrient: "vertical" as const, overflow: "hidden",
+          }}>
+            <Zap size={9} style={{ display: "inline", marginRight: 3, color: "#fbbf24", verticalAlign: "middle" }} />
+            {item.aiImpact}
+          </p>
+        )}
+        {hasAiImpact && isWide && !isFeatured && (
+          <p style={{
+            margin: "0.38rem 0 0", fontSize: "0.68rem", color: "rgba(255,255,255,0.55)", lineHeight: 1.45,
+            display: "-webkit-box", WebkitLineClamp: 1,
+            WebkitBoxOrient: "vertical" as const, overflow: "hidden",
+          }}>
+            <Zap size={9} style={{ display: "inline", marginRight: 3, color: "#fbbf24", verticalAlign: "middle" }} />
+            {item.aiImpact}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Skeleton Card ────────────────────────────────────────────────────────────
+
+function SkeletonCard({ theme, size }: { theme: "light" | "dark"; size: CardSize }) {
+  const colSpan = (size === "wide" || size === "featured") ? 2 : 1;
+  const rowSpan = (size === "tall" || size === "featured") ? 2 : 1;
+  return (
+    <div style={{
+      gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}`,
+      borderRadius: 14,
+      background: theme === "dark" ? "#1a1a1a" : "#e8e8e8",
+      position: "relative", overflow: "hidden",
+    }}>
+      <div style={{
+        position: "absolute", inset: 0,
+        backgroundImage: theme === "dark"
+          ? "linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.04) 50%,transparent 100%)"
+          : "linear-gradient(90deg,transparent 0%,rgba(255,255,255,0.6) 50%,transparent 100%)",
+        backgroundSize: "200% 100%",
+        animation: "shimmer 1.6s ease-in-out infinite",
+      }} />
+    </div>
+  );
+}
+
+// ── News Chat Panel ──────────────────────────────────────────────────────────
+
+interface NewsConversation {
+  id: string;
+  title: string;
+  preview: string;
+  session_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function NewsChatPanel({
+  theme,
+  pinnedArticles,
+  onRemovePin,
+  onClearPins,
+  onClose,
+  currentUser,
+}: {
+  theme: "light" | "dark";
+  pinnedArticles: PinnedArticle[];
+  onRemovePin: (id: string) => void;
+  onClearPins: () => void;
+  onClose: () => void;
+  currentUser: any;
+}) {
+  const { t } = useTranslation();
+  const WELCOME: ChatMessage = {
+    id: "welcome",
+    role: "assistant",
+    content: t("news.chat_welcome"),
+    timestamp: new Date(),
+  };
+
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME]);
+  const [input, setInput]                     = useState("");
+  const [conversationId, setConversationId]   = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId]             = useState(() => crypto.randomUUID());
+  const [isLoading, setIsLoading]             = useState(false);
+  const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
+  const [copiedMsgId, setCopiedMsgId]         = useState<string | null>(null);
+  const [feedback, setFeedback]               = useState<Record<string, "like" | "dislike" | null>>({});
+
+  // Conversation history sidebar
+  const [pastConvs, setPastConvs]         = useState<NewsConversation[]>([]);
+  const [showHistory, setShowHistory]     = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef       = useRef<HTMLTextAreaElement>(null);
+  const dark = theme === "dark";
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // ── Auth helpers ────────────────────────────────────────────────────────
+  const getAuthHeader = useCallback((): Record<string, string> => {
+    if (!currentUser?.token) return {};
+    return { Authorization: `Bearer ${currentUser.token}` };
+  }, [currentUser]);
+
+  // ── Save conversation to DB ─────────────────────────────────────────────
+  const saveToDB = useCallback(async (
+    convId: string,
+    sid: string,
+    msgs: ChatMessage[],
+  ) => {
+    if (!currentUser) return;
+    // Only save if there are real messages (skip welcome-only state)
+    const realMsgs = msgs.filter(m => m.id !== "welcome");
+    if (realMsgs.length === 0) return;
+
+    const firstUser = realMsgs.find(m => m.role === "user");
+    const title   = firstUser ? firstUser.content.slice(0, 60) : "News Chat";
+    const preview = realMsgs[realMsgs.length - 1]?.content?.slice(0, 120) ?? "";
+
+    try {
+      await fetch(`${API_BASE}/auth/news-conversations/save`, {
+        method: "POST",
+        credentials: "include",
+        headers: { ...getAuthHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: convId,
+          session_id: sid,
+          title,
+          preview,
+          messages: realMsgs.map(m => ({
+            id:             m.id,
+            role:           m.role,
+            content:        m.rawAnswer ?? m.content,
+            timestamp:      m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+            pinnedArticles: m.pinnedArticles ?? undefined,
+          })),
+        }),
+      });
+    } catch (e) {
+      console.error("news saveToDB failed:", e);
+    }
+  }, [currentUser, getAuthHeader]);
+
+  // ── Load past conversations list ────────────────────────────────────────
+  const loadHistory = useCallback(async () => {
+    if (!currentUser) return;
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/news-conversations`, {
+        credentials: "include",
+        headers: getAuthHeader(),
+      });
+      if (res.ok) {
+        const rows: NewsConversation[] = await res.json();
+        setPastConvs(rows);
+      }
+    } catch (e) {
+      console.error("loadHistory failed:", e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [currentUser, getAuthHeader]);
+
+  // Load history when panel opens (if logged in)
+  useEffect(() => {
+    if (currentUser) loadHistory();
+  }, [currentUser, loadHistory]);
+
+  // ── Open a past conversation ────────────────────────────────────────────
+  const openConversation = useCallback(async (conv: NewsConversation) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/news-conversations/${conv.id}`, {
+        credentials: "include",
+        headers: getAuthHeader(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const restored: ChatMessage[] = (data.messages ?? []).map((m: any) => ({
+        id:             m.id ?? Date.now().toString(),
+        role:           m.role as "user" | "assistant",
+        content:        m.content ?? "",
+        timestamp:      new Date(m.timestamp ?? Date.now()),
+        pinnedArticles: m.payload?.pinnedArticles ?? undefined,
+      }));
+      setMessages(restored.length > 0 ? restored : [WELCOME]);
+      setConversationId(conv.id);
+      setSessionId(conv.session_id ?? crypto.randomUUID());
+      setShowHistory(false);
+    } catch (e) {
+      console.error("openConversation failed:", e);
+    }
+  }, [getAuthHeader]);
+
+  // ── Delete a past conversation ──────────────────────────────────────────
+  const deleteConversation = useCallback(async (convId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    try {
+      await fetch(`${API_BASE}/auth/news-conversations/${convId}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: getAuthHeader(),
+      });
+      setPastConvs(prev => prev.filter(c => c.id !== convId));
+    } catch (e) {
+      console.error("deleteConversation failed:", e);
+    }
+  }, [currentUser, getAuthHeader]);
+
+  // ── Start a fresh chat ──────────────────────────────────────────────────
+  const startNewChat = useCallback(() => {
+    setMessages([WELCOME]);
+    setConversationId(crypto.randomUUID());
+    setSessionId(crypto.randomUUID());
+    setShowHistory(false);
+    onClearPins();
+  }, [onClearPins]);
+
+  // ── Send query ──────────────────────────────────────────────────────────
+  const sendQuery = useCallback(async (text: string, currentPinned: typeof pinnedArticles) => {
+    const loadingId  = Date.now().toString() + "-l";
+    const loadingMsg: ChatMessage = { id: loadingId, role: "assistant", content: "", loading: true, timestamp: new Date() };
+    setMessages(prev => [...prev, loadingMsg]);
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/news/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeader() },
+        body: JSON.stringify({
+          query:           text,
+          session_id:      sessionId,
+          pinned_articles: currentPinned.map(a => ({
+            id:         a.id,
+            title:      a.title,
+            category:   a.category,
+            source:     a.source,
+            articleUrl: a.articleUrl  ?? "",
+            aiImpact:   a.aiImpact    ?? "",
+            rawSummary: a.rawSummary  ?? "",
+            imageUrl:   a.imageUrl    ?? null,
+          })),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data      = await res.json();
+      const answer    = data.answer ?? "Sorry, no response received.";
+      const assistantId = loadingId + "-done";
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === loadingId
+            ? { ...m, id: assistantId, content: "", rawAnswer: answer, loading: false, timestamp: new Date() }
+            : m
+        );
+        // Save to DB after state is resolved
+        saveToDB(conversationId, sessionId, updated);
+        return updated;
+      });
+      setTypingMessageId(assistantId);
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.id === loadingId ? { ...m, content: "Something went wrong. Please try again.", loading: false } : m
+      ));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [sessionId, conversationId, getAuthHeader, saveToDB]);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text || isLoading) return;
+    const currentPinned = [...pinnedArticles];
+    const userMsg: ChatMessage = {
+      id: Date.now().toString(),
+      role: "user",
+      content: text,
+      timestamp: new Date(),
+      pinnedArticles: currentPinned.length > 0 ? currentPinned : undefined,
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setInput("");
+    onClearPins();
+    await sendQuery(text, currentPinned);
+  }, [input, isLoading, pinnedArticles, sendQuery, onClearPins]);
+
+  const handleRedo = useCallback(async (msgId: string) => {
+    if (isLoading) return;
+    setMessages(prev => {
+      const idx = prev.findIndex(m => m.id === msgId);
+      const userMsg = idx > 0 ? prev[idx - 1] : null;
+      if (!userMsg || userMsg.role !== "user") return prev;
+      const trimmed = prev.filter((_, i) => i !== idx);
+      sendQuery(userMsg.content, userMsg.pinnedArticles ?? []);
+      return trimmed;
+    });
+  }, [isLoading, sendQuery]);
+
+  const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!isLoading) handleSend(); }
+  };
+
+  return (
+    <div style={{
+      width: "100%",
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      height: "100%",
+      overflow: "hidden",
+      background: dark ? "#0c0d18" : "#f0f1f8",
+    }}>
+
+      {/* ── Panel header ──────────────────────────────────────────────── */}
+      <div style={{
+        padding: "0.85rem 1rem 0.7rem",
+        background: dark
+          ? "linear-gradient(160deg, #101528 0%, #0c0d18 100%)"
+          : "linear-gradient(160deg, #e6e8f5 0%, #f0f1f8 100%)",
+        borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)"}`,
+        flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{
+              width: 30, height: 30, borderRadius: 9,
+              background: "linear-gradient(135deg, #1d6cf6, #7c3aed)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 4px 12px rgba(29,108,246,0.35)",
+              flexShrink: 0,
+            }}>
+              <img src="/favicon.svg" alt="" style={{ width: 16, height: 16, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: "0.8rem", fontWeight: 700, color: dark ? "#fff" : "#111", lineHeight: 1.2 }}>{t("news.ask_bimlo")}</div>
+              <div style={{ fontSize: "0.58rem", color: dark ? "rgba(255,255,255,0.38)" : "rgba(0,0,0,0.38)" }}>{t("news.intelligence")}</div>
+            </div>
+          </div>
+          {/* Right controls: history + new chat + close */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+            {currentUser && (
+              <>
+                <button
+                  onClick={() => { setShowHistory(h => !h); if (!showHistory) loadHistory(); }}
+                  title={t("news.chat_history")}
+                  style={{
+                    width: 26, height: 26, borderRadius: 7, border: "none",
+                    background: showHistory
+                      ? (dark ? "rgba(29,108,246,0.25)" : "rgba(29,108,246,0.12)")
+                      : (dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)"),
+                    color: showHistory ? "#3b9eff" : (dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)"),
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer",
+                  }}
+                ><History size={11} /></button>
+                <button
+                  onClick={startNewChat}
+                  title={t("news.new_chat")}
+                  style={{
+                    width: 26, height: 26, borderRadius: 7, border: "none",
+                    background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
+                    color: dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer",
+                  }}
+                ><Plus size={11} /></button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              style={{
+                width: 26, height: 26, borderRadius: 7, border: "none",
+                background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
+                color: dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: "pointer",
+              }}
+            ><X size={12} /></button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── History Drawer ────────────────────────────────────────────── */}
+      {showHistory && (
+        <div style={{
+          flex: 1, overflowY: "auto", display: "flex", flexDirection: "column",
+          background: dark ? "#0c0d18" : "#f0f1f8",
+        }}>
+          <div style={{
+            padding: "0.6rem 0.9rem 0.4rem",
+            fontSize: "0.65rem", fontWeight: 700,
+            color: dark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.35)",
+            letterSpacing: "0.05em", textTransform: "uppercase",
+            borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}`,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span>{t("news.past_news_chats")}</span>
+            <button
+              onClick={() => setShowHistory(false)}
+              style={{
+                background: "none", border: "none", cursor: "pointer", padding: 2,
+                color: dark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.3)",
+                display: "flex", alignItems: "center",
+              }}
+            ><ChevronLeft size={11} /></button>
+          </div>
+          {loadingHistory ? (
+            <div style={{ padding: "1.5rem", display: "flex", justifyContent: "center" }}>
+              <Loader2 size={16} color="#3b9eff" style={{ animation: "spin 1s linear infinite" }} />
+            </div>
+          ) : pastConvs.length === 0 ? (
+            <div style={{
+              padding: "2rem 1rem", textAlign: "center",
+              fontSize: "0.68rem", color: dark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.28)",
+            }}>
+              {t("news.no_past_chats")}<br />{t("news.start_conversation_above")}
+            </div>
+          ) : (
+            <div style={{ overflowY: "auto", flex: 1 }}>
+              {pastConvs.map(conv => (
+                <div
+                  key={conv.id}
+                  onClick={() => openConversation(conv)}
+                  style={{
+                    padding: "0.55rem 0.9rem",
+                    cursor: "pointer",
+                    borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)"}`,
+                    display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.4rem",
+                    transition: "background 0.12s",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = dark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: "0.7rem", fontWeight: 600,
+                      color: dark ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.75)",
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>{conv.title}</div>
+                    {conv.preview && (
+                      <div style={{
+                        fontSize: "0.6rem", marginTop: 2,
+                        color: dark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.35)",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{conv.preview}</div>
+                    )}
+                    <div style={{
+                      fontSize: "0.55rem", marginTop: 3,
+                      color: dark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.25)",
+                    }}>
+                      {conv.updated_at ? new Date(conv.updated_at).toLocaleDateString([], { month: "short", day: "numeric" }) : ""}
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => deleteConversation(conv.id, e)}
+                    title={t("chat.delete")}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer", padding: "0.2rem",
+                      color: dark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.25)",
+                      display: "flex", alignItems: "center", flexShrink: 0,
+                      transition: "color 0.12s",
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.color = "#ef4444")}
+                    onMouseLeave={e => (e.currentTarget.style.color = dark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.25)")}
+                  ><Trash2 size={10} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Messages ──────────────────────────────────────────────────── */}
+      {!showHistory && (
+        <div style={{
+          flex: 1, overflowY: "auto",
+          padding: "0.85rem 0.9rem",
+          display: "flex", flexDirection: "column", gap: "0.65rem",
+          scrollbarWidth: "thin",
+          scrollbarColor: dark ? "rgba(255,255,255,0.08) transparent" : "rgba(0,0,0,0.08) transparent",
+        }}>
+          {messages.map(msg => {
+            const hasRef = msg.role === "user" && msg.pinnedArticles && msg.pinnedArticles.length > 0;
+            return (
+              <div key={msg.id} style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: "0.18rem" }}>
+                {hasRef && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.22rem", justifyContent: "flex-end", maxWidth: "90%" }}>
+                    {msg.pinnedArticles!.map(a => (
+                      <span key={a.id} style={{
+                        fontSize: "0.54rem", fontWeight: 600,
+                        color: dark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.5)",
+                        background: dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.06)",
+                        border: `1px solid ${dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)"}`, borderRadius: 999,
+                        padding: "0.1rem 0.38rem",
+                        maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}>{a.title}</span>
+                    ))}
+                  </div>
+                )}
+                <div dir={isRTLText(msg.content) ? "rtl" : "ltr"} style={{
+                  maxWidth: "90%",
+                  padding: msg.role === "user" ? "0.5rem 0.72rem" : "0.6rem 0.78rem",
+                  borderRadius: msg.role === "user"
+                    ? (hasRef ? "13px 3px 13px 13px" : "13px")
+                    : "3px 13px 13px 13px",
+                  background: msg.role === "user"
+                    ? "linear-gradient(135deg, #1d6cf6 0%, #7c3aed 100%)"
+                    : dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)",
+                  border: msg.role === "assistant"
+                    ? `1px solid ${dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)"}`
+                    : "none",
+                  fontSize: "0.73rem", lineHeight: 1.55,
+                  color: msg.role === "user" ? "#fff" : dark ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.78)",
+                  whiteSpace: msg.role === "user" ? "pre-wrap" : "normal",
+                  wordBreak: "break-word",
+                  overflowWrap: "break-word",
+                  minWidth: 0,
+                }}>
+                  {msg.loading ? (
+                    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                      {[0, 1, 2].map(i => (
+                        <span key={i} style={{
+                          width: 5, height: 5, borderRadius: "50%",
+                          background: "#3b9eff", display: "inline-block",
+                          animation: `dotBounce 1.2s ease-in-out ${i * 0.18}s infinite`,
+                        }} />
+                      ))}
+                    </span>
+                  ) : msg.role === "assistant" && msg.id === typingMessageId && msg.rawAnswer ? (
+                    <TypewriterText
+                      text={msg.rawAnswer}
+                      speed={10}
+                      onComplete={() => {
+                        setTypingMessageId(null);
+                        setMessages(prev => prev.map(m =>
+                          m.id === msg.id ? { ...m, content: m.rawAnswer ?? m.content } : m
+                        ));
+                      }}
+                      render={(partial: string) => (
+                        <div style={{ wordBreak: "break-word", overflowWrap: "break-word" }}>
+                          {renderMarkdown(partial, dark)}
+                        </div>
+                      )}
+                    />
+                  ) : msg.role === "assistant" ? (
+                    renderMarkdown(msg.content, dark)
+                  ) : msg.content}
+                </div>
+
+                {!msg.loading && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: "0.25rem",
+                    marginTop: "0.22rem",
+                    justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                  }}>
+                    <span style={{ fontSize: "0.58rem", color: dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.28)" }}>
+                      {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    {msg.role === "assistant" && msg.id !== typingMessageId && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.1rem", marginInlineStart: "0.2rem" }}>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(msg.rawAnswer ?? msg.content);
+                            setCopiedMsgId(msg.id);
+                            setTimeout(() => setCopiedMsgId(null), 1500);
+                          }}
+                          title={t("news.copy_response")}
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: "0.2rem",
+                            padding: "0.18rem 0.38rem", borderRadius: 5, border: "none",
+                            fontSize: "0.58rem", fontWeight: 600, cursor: "pointer",
+                            background: copiedMsgId === msg.id
+                              ? (dark ? "rgba(59,158,255,0.18)" : "rgba(59,158,255,0.12)")
+                              : "transparent",
+                            color: copiedMsgId === msg.id
+                              ? "#3b9eff"
+                              : dark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.28)",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          {copiedMsgId === msg.id
+                            ? <><Check size={9} /><span>{t("news.copied")}</span></>
+                            : <><Copy size={9} /><span>{t("news.copy_response")}</span></>}
+                        </button>
+                        <button
+                          onClick={() => setFeedback(prev => ({ ...prev, [msg.id]: prev[msg.id] === "like" ? null : "like" }))}
+                          title={t("news.good_response")}
+                          style={{
+                            display: "inline-flex", padding: "0.22rem", borderRadius: 5,
+                            border: "none", cursor: "pointer", background: "transparent",
+                            color: feedback[msg.id] === "like" ? "#3b9eff" : dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.25)",
+                            transition: "color 0.15s",
+                          }}
+                        ><ThumbsUp size={9} /></button>
+                        <button
+                          onClick={() => setFeedback(prev => ({ ...prev, [msg.id]: prev[msg.id] === "dislike" ? null : "dislike" }))}
+                          title={t("news.bad_response")}
+                          style={{
+                            display: "inline-flex", padding: "0.22rem", borderRadius: 5,
+                            border: "none", cursor: "pointer", background: "transparent",
+                            color: feedback[msg.id] === "dislike" ? "#ef4444" : dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.25)",
+                            transition: "color 0.15s",
+                          }}
+                        ><ThumbsDown size={9} /></button>
+                        <button
+                          onClick={() => handleRedo(msg.id)}
+                          disabled={isLoading}
+                          title={t("news.regenerate")}
+                          style={{
+                            display: "inline-flex", padding: "0.22rem", borderRadius: 5,
+                            border: "none", cursor: isLoading ? "not-allowed" : "pointer",
+                            background: "transparent", opacity: isLoading ? 0.3 : 1,
+                            color: dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.25)",
+                            transition: "color 0.15s",
+                          }}
+                        ><RotateCcw size={9} /></button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
+
+      {/* ── Input ─────────────────────────────────────────────────────── */}
+      {!showHistory && (
+        <div style={{
+          padding: "0.5rem 0.7rem 0.6rem",
+          borderTop: `1px solid ${dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)"}`,
+          background: dark ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.6)",
+          flexShrink: 0,
+        }}>
+          {pinnedArticles.length > 0 && (
+            <div className="pinned-chips-scroll" style={{
+              display: "flex", flexWrap: "nowrap", gap: "0.3rem", marginBottom: "0.4rem",
+              overflowX: "auto", paddingBottom: "4px",
+              scrollbarWidth: "thin",
+              scrollbarColor: dark ? "rgba(255,255,255,0.22) transparent" : "rgba(0,0,0,0.18) transparent",
+            }}>
+              {pinnedArticles.map(a => {
+                const m = CATEGORY_META[a.category] ?? CATEGORY_META["General"];
+                const neutralText   = dark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)";
+                const neutralBorder = dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.12)";
+                const neutralThumb  = dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)";
+                return (
+                  <span key={a.id} style={{
+                    display: "inline-flex", alignItems: "center", gap: "0.3rem",
+                    fontSize: "0.6rem", fontWeight: 600, color: neutralText,
+                    background: dark ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.92)",
+                    border: `1px solid ${neutralBorder}`, borderRadius: 7,
+                    padding: "0.15rem 0.35rem 0.15rem 0.15rem",
+                    maxWidth: 200, backdropFilter: "blur(4px)", flexShrink: 0,
+                  }}>
+                    <span style={{
+                      width: 28, height: 20, borderRadius: 4, overflow: "hidden",
+                      flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      background: neutralThumb, position: "relative",
+                    }}>
+                      {a.imageUrl ? (
+                        <img src={a.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                          onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      ) : (
+                        <m.Icon size={10} color={neutralText} />
+                      )}
+                    </span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>{a.title}</span>
+                    <button onClick={() => onRemovePin(a.id)}
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: neutralText, display: "flex", lineHeight: 1, flexShrink: 0, marginInlineStart: 1 }}
+                    ><X size={9} /></button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.45rem",
+            background: dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
+            border: `1px solid ${dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.09)"}`,
+            borderRadius: 12, padding: "0.45rem 0.45rem 0.45rem 0.7rem",
+            minHeight: 42,
+          }}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => !isLoading && setInput(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder={
+                isLoading
+                  ? "Waiting for response…"
+                  : pinnedArticles.length > 0
+                    ? `Ask about ${pinnedArticles.length === 1 ? "this article" : `these ${pinnedArticles.length} articles`}…`
+                    : "Ask about the news…"
+              }
+              rows={1}
+              disabled={isLoading}
+              style={{
+                flex: 1, background: "transparent", border: "none", outline: "none",
+                resize: "none", fontSize: "0.75rem", lineHeight: 1.5,
+                color: dark ? (isLoading ? "rgba(255,255,255,0.3)" : "#fff") : (isLoading ? "rgba(0,0,0,0.3)" : "#000"),
+                fontFamily: "inherit",
+                maxHeight: 80, overflowY: "auto", scrollbarWidth: "none",
+                padding: 0, margin: 0, alignSelf: "center", minHeight: "1.125rem",
+                cursor: isLoading ? "not-allowed" : "text",
+              }}
+              onInput={e => {
+                const el = e.target as HTMLTextAreaElement;
+                el.style.height = "auto";
+                el.style.height = Math.min(el.scrollHeight, 80) + "px";
+              }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || isLoading}
+              title="Ask Bimlo"
+              style={{
+                width: 30, height: 30, borderRadius: 9, border: "none", flexShrink: 0,
+                background: input.trim() && !isLoading
+                  ? "linear-gradient(135deg, #1d6cf6 0%, #7c3aed 100%)"
+                  : dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)",
+                cursor: input.trim() && !isLoading ? "pointer" : "not-allowed",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: input.trim() && !isLoading ? 1 : 0.38,
+                transition: "all 0.15s",
+                boxShadow: input.trim() && !isLoading ? "0 4px 12px rgba(29,108,246,0.4)" : "none",
+              }}
+            >
+              {isLoading
+                ? <Loader2 size={13} color="rgba(255,255,255,0.6)" style={{ animation: "spin 1s linear infinite" }} />
+                : <img src="/favicon.svg" alt="" style={{ width: 13, height: 13, objectFit: "contain", filter: input.trim() ? "brightness(0) invert(1)" : dark ? "brightness(0) invert(0.35)" : "brightness(0) opacity(0.3)" }} />
+              }
+            </button>
+          </div>
+          <p style={{
+            margin: "0.28rem 0 0", fontSize: "0.54rem", textAlign: "center",
+            color: dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.22)",
+          }}>
+            Enter · Shift+Enter for new line
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main Page ────────────────────────────────────────────────────────────────
+
+const NewsPage = () => {
+  const navigate = useNavigate();
+  const { currentUser, logout } = useAuth();
+  const { t } = useTranslation();
+  const navbarRef = useRef<HTMLDivElement>(null);
+  const [navbarHeight, setNavbarHeight] = useState(108);
+
+  useEffect(() => {
+    const el = navbarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setNavbarHeight(el.offsetHeight));
+    ro.observe(el);
+    setNavbarHeight(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    (typeof window !== "undefined" && (localStorage.getItem("theme") as "light" | "dark")) || "dark"
+  );
+  const toggleTheme = () => {
+    const t = theme === "light" ? "dark" : "light";
+    setTheme(t);
+    localStorage.setItem("theme", t);
+    if (t === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  };
+
+  // Sync on mount
+  useEffect(() => {
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }, []);
+
+  const [filter, setFilter]               = useState<string>("All");
+  const dark = theme === "dark";
+  const [allArticles, setAllArticles]     = useState<any[]>([]);
+  const [visibleCount, setVisibleCount]   = useState(PAGE_SIZE);
+  const [revealedSet, setRevealedSet]     = useState<Set<number>>(new Set());
+  const prevVisibleCount                  = useRef(0);
+  const renderedIds                       = useRef<Set<string>>(new Set());
+  const [currentPage, setCurrentPage]     = useState(0);
+  const [totalPages, setTotalPages]       = useState(0);
+  const [hasMore, setHasMore]             = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [fetchingMore, setFetchingMore]   = useState(false);
+  const [isRefreshing, setIsRefreshing]   = useState(false);
+  const [newRunAvailable, setNewRunAvailable] = useState(false);
+  const knownRunAt                        = useRef<string | null>(null);
+  const loadMoreGuard                     = useRef(false);
+
+  // ── Chat state ─────────────────────────────────────────────────────────
+  const [chatOpen, setChatOpen]             = useState(false);
+  const [pinnedArticles, setPinnedArticles] = useState<PinnedArticle[]>([]);
+
+  const handlePinArticle = useCallback((item: any) => {
+    const id = item.id ?? item.articleUrl ?? item.title ?? String(Math.random());
+    setPinnedArticles(prev => {
+      if (prev.find(a => a.id === id)) return prev.filter(a => a.id !== id);
+      return [...prev.slice(-4), { id, title: item.title, category: item.category, source: item.source, aiImpact: item.aiImpact, rawSummary: item.raw_summary ?? item.rawSummary ?? "", articleUrl: item.article_url ?? item.articleUrl ?? "", imageUrl: item.imageUrl ?? null }];
+    });
+    setChatOpen(true);
+  }, []);
+
+  const handleRemovePin = useCallback((id: string) => {
+    setPinnedArticles(prev => prev.filter(a => a.id !== id));
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.add("scrollbar-thin");
+    window.scrollTo(0, 0);
+    return () => document.documentElement.classList.remove("scrollbar-thin");
+  }, []);
+
+  const addArticles = useCallback((items: any[]) => {
+    const fresh = items.map(normalize).filter(a => {
+      // Drop stale cache artefacts — articles with no valid/recent timestamp
+      if (!isArticleFresh(a.publishedAt)) return false;
+      const id = a.id ?? a.articleUrl ?? a.title ?? String(Math.random());
+      if (renderedIds.current.has(id)) return false;
+      renderedIds.current.add(id); return true;
+    });
+    if (fresh.length === 0) return;
+    setAllArticles(prev => [...prev, ...fresh]);
+  }, []);
+
+  const fetchPage = useCallback(async (pageNum: number): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/api/news/pages/${pageNum}`, { cache: "no-store" });
+      if (!res.ok) return false;
+      const data = await res.json();
+      addArticles(data.items ?? []);
+      setCurrentPage(pageNum);
+      setHasMore(data.has_more ?? false);
+      return true;
+    } catch (e) { console.error(`fetchPage(${pageNum}) error:`, e); return false; }
+  }, [addArticles]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function init() {
+      setIsInitialLoading(true);
+      try {
+        const metaRes = await fetch(`${API_BASE}/api/news/meta`, { cache: "no-store" });
+        if (!metaRes.ok) throw new Error("No cache yet");
+        const meta = await metaRes.json();
+        if (!cancelled) { setTotalPages(meta.total_pages ?? 0); knownRunAt.current = meta.run_at ?? null; }
+        await fetchPage(0);
+      } catch (e) {
+        console.error("Initial load error:", e);
+        if (!cancelled) pollUntilReady();
+      } finally {
+        if (!cancelled) setIsInitialLoading(false);
+      }
+    }
+    init();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pollUntilReady = useCallback(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/news/status`, { cache: "no-store" });
+        const data = await res.json();
+        if (!data.running && data.total_pages > 0) {
+          clearInterval(interval);
+          const metaRes = await fetch(`${API_BASE}/api/news/meta`, { cache: "no-store" });
+          const meta = await metaRes.json();
+          setTotalPages(meta.total_pages ?? 0);
+          knownRunAt.current = meta.run_at ?? null;
+          await fetchPage(0);
+          setIsInitialLoading(false);
+        }
+      } catch (_) {}
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [fetchPage]);
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/news/status`, { cache: "no-store" });
+        const data = await res.json();
+        if (knownRunAt.current !== null && data.last_run_at !== null && data.last_run_at !== knownRunAt.current)
+          setNewRunAvailable(true);
+      } catch (_) {}
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const resetAndReload = useCallback(async () => {
+    renderedIds.current.clear();
+    setAllArticles([]); setVisibleCount(PAGE_SIZE); setRevealedSet(new Set());
+    prevVisibleCount.current = 0; setCurrentPage(0); setHasMore(true);
+    setNewRunAvailable(false); setIsInitialLoading(true);
+    try {
+      const metaRes = await fetch(`${API_BASE}/api/news/meta`, { cache: "no-store" });
+      const meta = await metaRes.json();
+      setTotalPages(meta.total_pages ?? 0); knownRunAt.current = meta.run_at ?? null;
+      await fetchPage(0);
+    } catch (e) { console.error("resetAndReload error:", e); }
+    finally { setIsInitialLoading(false); }
+  }, [fetchPage]);
+
+  // Soft refresh: resets the view and reloads from the already-built cache.
+  // Available to ALL users. Does NOT trigger a new pipeline run.
+  const handleRefresh = useCallback(async () => {
+    if (isRefreshing || fetchingMore) return;
+    setIsRefreshing(true);
+    try {
+      await resetAndReload();
+    } catch (e) { console.error("Refresh error:", e); }
+    finally { setIsRefreshing(false); }
+  }, [isRefreshing, fetchingMore, resetAndReload]);
+
+  // Admin-only: trigger a full pipeline re-fetch of fresh news from the web
+  const handleAdminForceRefresh = useCallback(async () => {
+    if (isRefreshing || fetchingMore) return;
+    setIsRefreshing(true);
+    try {
+      await fetch(`${API_BASE}/api/news/trigger?force=true`, { method: "POST" });
+      const poll = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/news/status`, { cache: "no-store" });
+          const data = await res.json();
+          if (!data.running) { clearInterval(poll); setIsRefreshing(false); await resetAndReload(); }
+        } catch (_) {}
+      }, 5000);
+    } catch (e) { console.error("Force refresh trigger error:", e); setIsRefreshing(false); }
+  }, [isRefreshing, fetchingMore, resetAndReload]);
+
+  const filtered = filter === "All" ? allArticles : allArticles.filter(a => a.category === filter);
+  const visible  = filtered.slice(0, visibleCount);
+
+  useEffect(() => {
+    const start = prevVisibleCount.current, end = visible.length;
+    if (end <= start) { prevVisibleCount.current = end; return; }
+    prevVisibleCount.current = end;
+    for (let i = start; i < end; i++) {
+      setTimeout(() => { setRevealedSet(prev => { const s = new Set(prev); s.add(i); return s; }); }, (i - start) * 55);
+    }
+  }, [visible.length]);
+
+  useEffect(() => { setRevealedSet(new Set()); prevVisibleCount.current = 0; setVisibleCount(PAGE_SIZE); }, [filter]);
+
+  const loadMore = useCallback(async () => {
+    if (loadMoreGuard.current || fetchingMore || isInitialLoading) return;
+    if (visibleCount < filtered.length) { setVisibleCount(c => c + PAGE_SIZE); return; }
+    if (!hasMore) return;
+    const nextPage = currentPage + 1;
+    if (totalPages > 0 && nextPage >= totalPages) { setHasMore(false); return; }
+    loadMoreGuard.current = true; setFetchingMore(true);
+    try { const ok = await fetchPage(nextPage); if (ok) setVisibleCount(c => c + PAGE_SIZE); }
+    finally { setFetchingMore(false); loadMoreGuard.current = false; }
+  }, [loadMoreGuard, fetchingMore, isInitialLoading, visibleCount, filtered.length, hasMore, currentPage, totalPages, fetchPage]);
+
+  const sentinelRef = useInfiniteScroll(loadMore, !isInitialLoading && !fetchingMore && (hasMore || visibleCount < filtered.length));
+
+  const gridCols = chatOpen ? 3 : 4;
+  const gridStyle: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+    gridAutoRows: "160px",
+    gap: "0.75rem",
+    gridAutoFlow: "dense",
+  };
+
+  const pinnedIds = new Set(pinnedArticles.map(a => a.id));
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: theme === "dark" ? "#07080f" : "#f5f4fb",
+      transition: "background 0.15s ease",
+      color: theme === "dark" ? "#ffffff" : "#000000",
+    }}>
+      <style>{`
+        @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+        @keyframes spin    { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+        @keyframes dotBounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+          40%            { transform: translateY(-5px); opacity: 1; }
+        }
+        @media (max-width: 1024px) { .news-grid { grid-template-columns: repeat(2, 1fr) !important; } }
+        @media (max-width: 640px) {
+          .news-grid { grid-template-columns: 1fr !important; grid-auto-rows: 200px !important; }
+          .news-grid > * { grid-column: span 1 !important; grid-row: span 1 !important; }
+        }
+        .pinned-chips-scroll::-webkit-scrollbar { height: 4px; }
+        .pinned-chips-scroll::-webkit-scrollbar-track { background: transparent; }
+        .pinned-chips-scroll::-webkit-scrollbar-thumb { background: ${theme === "dark" ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.18)"}; border-radius: 999px; }
+        .pinned-chips-scroll::-webkit-scrollbar-thumb:hover { background: ${theme === "dark" ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.28)"}; }
+        .filter-pills-scroll::-webkit-scrollbar { height: 3px; }
+        .filter-pills-scroll::-webkit-scrollbar-track { background: transparent; }
+        .filter-pills-scroll::-webkit-scrollbar-thumb { background: ${theme === "dark" ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.18)"}; border-radius: 999px; }
+        .filter-pills-scroll::-webkit-scrollbar-thumb:hover { background: ${theme === "dark" ? "rgba(255,255,255,0.32)" : "rgba(0,0,0,0.32)"}; }
+        html, body { scrollbar-width: thin; scrollbar-color: ${theme === "dark" ? "rgba(255,255,255,0.12) transparent" : "rgba(0,0,0,0.14) transparent"}; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: ${theme === "dark" ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.14)"}; border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: ${theme === "dark" ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.24)"}; }
+      `}</style>
+
+      {/* ── Sticky Navbar ─────────────────────────────────────────────── */}
+      <div ref={navbarRef} style={{
+        position: "sticky", top: 0, zIndex: 50,
+        background: theme === "dark" ? "rgba(7,8,15,0.92)" : "rgba(245,244,251,0.92)",
+        backdropFilter: "blur(12px)",
+        borderBottom: `1px solid ${theme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.06)"}`,
+        padding: "0.9rem 2.5rem 0",
+      }}>
+
+      {/* ── Header ────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <button onClick={() => navigate(-1)} title={t("common.back")} style={{ display: "inline-flex", alignItems: "center", color: theme === "dark" ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.6)", background: "none", border: "none", cursor: "pointer", padding: 0, opacity: 0.6 }}>
+            <ArrowLeft size={15} />
+          </button>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "1.35rem", fontWeight: 800, color: theme === "dark" ? "#fff" : "#000", lineHeight: 1.2 }}>{t("news.industry_briefing")}</h1>
+            <p style={{ margin: "0.1rem 0 0", fontSize: "0.72rem", color: theme === "dark" ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.6)", opacity: 0.65 }}>{t("news.telecom_intelligence")}</p>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
+          {/* Category filter — CardNav */}
+          <CardNav
+            filterMode
+            filterLabel={filter === "All" ? t("news.all_categories") : filter}
+            theme={theme}
+            ease="power3.out"
+            items={[
+              {
+                label: "General",
+                bgColor: dark ? "#0a1628" : "#0f1f3d",
+                textColor: "#fff",
+                links: [
+                  { label: t("news.cat_all"),        active: filter === "All",        onSelect: () => setFilter("All") },
+                  { label: t("news.cat_general"),    active: filter === "General",    onSelect: () => setFilter("General") },
+                ],
+              },
+              {
+                label: "Telecom",
+                bgColor: dark ? "#0c1a2e" : "#122040",
+                textColor: "#fff",
+                links: [
+                  { label: t("news.cat_5g"),         active: filter === "5G",         onSelect: () => setFilter("5G") },
+                  { label: t("news.cat_fiber"),      active: filter === "Fiber",      onSelect: () => setFilter("Fiber") },
+                  { label: t("news.cat_regulation"), active: filter === "Regulation", onSelect: () => setFilter("Regulation") },
+                ],
+              },
+              {
+                label: "Construction",
+                bgColor: dark ? "#10082a" : "#1a0f40",
+                textColor: "#fff",
+                links: [
+                  { label: t("news.cat_construction"), active: filter === "Construction", onSelect: () => setFilter("Construction") },
+                ],
+              },
+              {
+                label: "Advanced",
+                bgColor: dark ? "#1a0a0a" : "#2d0f0f",
+                textColor: "#fff",
+                links: [
+                  { label: t("news.cat_bim"),          active: filter === "BIM",             onSelect: () => setFilter("BIM") },
+                  { label: t("news.cat_digital_twin"), active: filter === "Digital Twin",    onSelect: () => setFilter("Digital Twin") },
+                  { label: t("news.cat_ai_construction"), active: filter === "AI Construction", onSelect: () => setFilter("AI Construction") },
+                ],
+              },
+            ]}
+          />
+
+          {/* article count */}
+          {!isInitialLoading && allArticles.length > 0 && (
+            <span style={{ fontSize: "0.65rem", color: dark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", gap: "0.3rem", flexShrink: 0 }}>
+              {visible.length} / {filtered.length}
+              {fetchingMore && <Loader2 size={10} style={{ animation: "spin 1s linear infinite", color: "#3b9eff" }} />}
+            </span>
+          )}
+
+          {/* Ask Bimlo toggle */}
+          <button
+            onClick={() => setChatOpen(o => !o)}
+            title={chatOpen ? "Close chat" : "Ask Bimlo about the news"}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.4rem",
+              height: 36, padding: "0 0.9rem", borderRadius: 9,
+              background: chatOpen
+                ? "linear-gradient(135deg, #1d6cf6 0%, #7c3aed 100%)"
+                : theme === "dark" ? "#1a1a1a" : "#e8e8e8",
+              border: chatOpen ? "1px solid rgba(124,58,237,0.4)" : `1px solid ${theme === "dark" ? "#333" : "#ddd"}`,
+              color: chatOpen ? "#fff" : theme === "dark" ? "#94a3b8" : "#666",
+              cursor: "pointer", fontSize: "0.7rem", fontWeight: 600,
+              transition: "all 0.18s",
+              boxShadow: chatOpen ? "0 4px 16px rgba(29,108,246,0.3)" : "none",
+            }}
+          >
+            <img src="/favicon.svg" alt="" style={{ width: 13, height: 13, objectFit: "contain", filter: chatOpen ? "brightness(0) invert(1)" : theme === "dark" ? "brightness(0) invert(0.6)" : "brightness(0) opacity(0.5)" }} />
+            {chatOpen ? "Close" : "Ask Bimlo"}
+            {pinnedArticles.length > 0 && !chatOpen && (
+              <span style={{
+                background: "#3b9eff", color: "#fff",
+                borderRadius: 999, fontSize: "0.55rem", fontWeight: 700,
+                padding: "0.05rem 0.38rem", lineHeight: 1.5,
+              }}>{pinnedArticles.length}</span>
+            )}
+          </button>
+
+          {/* Soft refresh — all users: reset view from cached data */}
+          <button onClick={handleRefresh} disabled={isRefreshing || fetchingMore} title="Reload articles from cache" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, background: theme === "dark" ? "#1a1a1a" : "#e8e8e8", border: `1px solid ${theme === "dark" ? "#33333388" : "#cccccc88"}`, cursor: isRefreshing || fetchingMore ? "not-allowed" : "pointer", transition: "all 0.15s", color: theme === "dark" ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.5)", opacity: isRefreshing || fetchingMore ? 0.5 : 1 }}>
+            <RefreshCw size={15} style={{ animation: isRefreshing ? "spin 0.8s linear infinite" : "none" }} />
+          </button>
+          {/* Force refresh — admin only: triggers full pipeline re-fetch */}
+          {currentUser?.role === "admin" && (
+            <button onClick={handleAdminForceRefresh} disabled={isRefreshing || fetchingMore} title="Force pipeline refresh (admin)" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, background: theme === "dark" ? "#1a1a1a" : "#e8e8e8", border: `1px solid ${theme === "dark" ? "#7c3aed55" : "#7c3aed44"}`, cursor: isRefreshing || fetchingMore ? "not-allowed" : "pointer", transition: "all 0.15s", color: "#7c3aed", opacity: isRefreshing || fetchingMore ? 0.5 : 1 }}>
+              <RefreshCcw size={15} style={{ animation: isRefreshing ? "spin 0.8s linear infinite" : "none" }} />
+            </button>
+          )}
+          <button onClick={toggleTheme} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, background: theme === "dark" ? "#1a1a1a" : "#e8e8e8", border: `1px solid ${theme === "dark" ? "#333" : "#ddd"}`, cursor: "pointer", transition: "all 0.15s", color: theme === "dark" ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.6)" }} title="Toggle theme">
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          {currentUser && (
+            <ProfileBubble user={currentUser} onLogout={logout} align="right" />
+          )}
+        </div>
+      </div>
+
+      {/* ── Banners inside navbar ─────────────────────────────────────── */}
+      {newRunAvailable && (
+        <div onClick={resetAndReload} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", padding: "0.45rem 1rem", marginBottom: "0.6rem", borderRadius: 10, cursor: "pointer", background: theme === "dark" ? "#0d2a1f" : "#d1fae5", border: `1px solid ${theme === "dark" ? "#1a5c3a" : "#6ee7b7"}`, fontSize: "0.75rem", fontWeight: 600, color: theme === "dark" ? "#34d399" : "#065f46" }}>
+          <RefreshCcw size={13} /> Fresh articles are ready — click to load them
+        </div>
+      )}
+      {isRefreshing && (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.68rem", fontWeight: 500, marginBottom: "0.6rem", color: theme === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.38)" }}>
+          <Loader2 size={11} style={{ animation: "spin 1s linear infinite", flexShrink: 0 }} />
+          Reloading articles…
+        </div>
+      )}
+
+      </div>{/* end sticky navbar */}
+
+      {/* ── Main layout: grid + chat panel ───────────────────────────── */}
+      <div style={{ display: "flex", gap: "1.2rem", alignItems: "flex-start", padding: "1.5rem 2.5rem 3rem" }}>
+
+        {/* Grid */}
+        <div style={{ flex: 1, minWidth: 0, paddingInlineEnd: chatOpen ? 384 : 0, transition: "padding-inline-end 0.28s cubic-bezier(0.4,0,0.2,1)" }}>
+          {isInitialLoading ? (
+            <div className="news-grid" style={gridStyle} dir="ltr">
+              {SIZE_PATTERN.map((size, i) => <SkeletonCard key={i} theme={theme} size={size} />)}
+            </div>
+          ) : visible.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "5rem 0", color: theme === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>
+              <Newspaper size={30} style={{ margin: "0 auto 0.6rem", display: "block" }} />
+              <p style={{ margin: 0, fontSize: "0.82rem" }}>
+                {totalPages === 0 ? "The Industry Analyst Agent is collecting articles. Check back in a few minutes." : "No articles in this category."}
+              </p>
+              {totalPages === 0 && <p style={{ margin: "0.4rem 0 0", fontSize: "0.68rem", opacity: 0.5 }}>Polls automatically every 8 seconds…</p>}
+              {totalPages > 0 && <button onClick={() => setFilter("All")} style={{ marginTop: "0.5rem", fontSize: "0.75rem", color: "#3b9eff", background: "none", border: "none", cursor: "pointer" }}>Show all →</button>}
+            </div>
+          ) : (
+            <>
+              <div className="news-grid" style={gridStyle} dir="ltr">
+                {visible.map((item, i) => {
+                  const id = item.id ?? item.articleUrl ?? item.title ?? String(i);
+                  return (
+                    <NewsCard
+                      key={item.id ?? item.articleUrl ?? i}
+                      item={item}
+                      revealed={revealedSet.has(i)}
+                      theme={theme}
+                      size={getSize(i)}
+                      onPin={handlePinArticle}
+                      isPinned={pinnedIds.has(id)}
+                      chatOpen={chatOpen}
+                    />
+                  );
+                })}
+                {fetchingMore && SIZE_PATTERN.slice(0, 4).map((size, i) => <SkeletonCard key={`skel-${i}`} theme={theme} size={size} />)}
+              </div>
+              <div ref={sentinelRef} style={{ height: 1, marginTop: "0.5rem" }} />
+              {fetchingMore && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.45rem", padding: "1rem 0", fontSize: "0.7rem", color: theme === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)" }}>
+                  <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> Loading more articles…
+                </div>
+              )}
+              {!hasMore && !fetchingMore && allArticles.length > 0 && (
+                <p style={{ textAlign: "center", padding: "1.2rem 0", fontSize: "0.65rem", color: theme === "dark" ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.25)" }}>
+                  You've reached the end of this cycle's briefing.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Chat panel — fixed, slides in from right, below navbar */}
+        {chatOpen && (
+          <div style={{
+            position: "fixed",
+            top: navbarHeight + 12,
+            insetInlineEnd: 12,
+            bottom: 12,
+            width: 360,
+            zIndex: 40,
+            display: "flex",
+            flexDirection: "column",
+            background: theme === "dark" ? "#0c0d18" : "#f0f1f8",
+            border: `1px solid ${theme === "dark" ? "rgba(59,158,255,0.15)" : "rgba(59,158,255,0.22)"}`,
+            borderRadius: 18,
+            boxShadow: theme === "dark"
+              ? "0 0 0 1px rgba(59,158,255,0.04), 0 24px 64px rgba(0,0,0,0.65)"
+              : "0 8px 40px rgba(0,0,0,0.13)",
+            overflow: "hidden",
+            animation: "slideInRight 0.28s cubic-bezier(0.4,0,0.2,1)",
+          }}>
+            <style>{`@keyframes slideInRight { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }`}</style>
+            <NewsChatPanel
+              theme={theme}
+              pinnedArticles={pinnedArticles}
+              onRemovePin={handleRemovePin}
+              onClearPins={() => setPinnedArticles([])}
+              onClose={() => setChatOpen(false)}
+              currentUser={currentUser}
+            />
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+};
+
+export default NewsPage;
