@@ -141,6 +141,10 @@ async def query_documents(
             voice_mode=request.voice_mode,
             preferred_provider=request.preferred_provider,
             attached_doc_filenames=_attached,
+            filter_project_name=request.project_name,
+            filter_site_id=request.site_id,
+            filter_doc_type=request.filter_doc_type,
+            sql_filters=request.sql_filters,
         )
 
         clean_answer = re.sub(r'\s*\[\d+\]', '', result["answer"]).strip()

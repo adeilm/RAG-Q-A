@@ -67,3 +67,9 @@ docker-compose.override.yml
 *.tmp
 *.bak
 .cache/
+assets/
+
+# Test Outputs
+pertinence_report.csv
+test_output.txt
+

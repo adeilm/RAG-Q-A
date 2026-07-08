@@ -149,7 +149,7 @@ class RAGEngine(RAGNodesMixin):
     #  PUBLIC API                                                         #
     # ------------------------------------------------------------------ #
 
-    def query(self, user_query: str, top_k: int = 8, conversation_history: Optional[List[Dict]] = None, prev_route: str = "", route_log: Optional[List[Dict]] = None, status_callback=None, force_route: Optional[str] = None, session_id: str = "", user_id: Optional[str] = None, voice_mode: bool = False, preferred_provider: Optional[str] = None, attached_doc_filenames: Optional[List[str]] = None, cancel_event=None) -> Dict[str, Any]:
+    def query(self, user_query: str, top_k: int = 8, conversation_history: Optional[List[Dict]] = None, prev_route: str = "", route_log: Optional[List[Dict]] = None, status_callback=None, force_route: Optional[str] = None, session_id: str = "", user_id: Optional[str] = None, voice_mode: bool = False, preferred_provider: Optional[str] = None, attached_doc_filenames: Optional[List[str]] = None, cancel_event=None, filter_project_name: Optional[str] = None, filter_site_id: Optional[str] = None, filter_doc_type: Optional[str] = None, sql_filters: Optional[Dict] = None) -> Dict[str, Any]:
         """Main entry point. conversation_history, prev_route, route_log all managed by main.py.
 
         attached_doc_filenames: filenames of documents explicitly attached to THIS message
@@ -223,6 +223,10 @@ class RAGEngine(RAGNodesMixin):
             "needs_summary": False,
             "clarification_options": [],
             "attached_doc_filenames": attached_doc_filenames or [],
+            "filter_project_name": filter_project_name,
+            "filter_site_id": filter_site_id,
+            "filter_doc_type": filter_doc_type,
+            "sql_filters": sql_filters,
         }
 
         print(f"\n{'='*80}")
@@ -744,6 +748,7 @@ Now generate for: "{q}" """
             "clarification_options": getattr(intent, "clarification_options", []) or [],
             "full_scope":            full_scope,
             "needs_summary":         getattr(intent, "needs_summary", False),
+            "sql_filters":           getattr(intent, "sql_filters", {}),
         }
 
     def direct_answer(self, state: AgentState) -> AgentState:
@@ -957,15 +962,36 @@ Now generate for: "{q}" """
             else:
                 results = self.vs.search(query, top_k=fetch_k, user_id=user_id, session_id=session_id)
         else:
+            # ── Hybrid search: apply project/site/doc_type filters ─────────
+            _f_project = state.get("filter_project_name")
+            _f_site    = state.get("filter_site_id")
+            _f_doctype = state.get("filter_doc_type")
+            _f_sql     = state.get("sql_filters")
+            _has_meta_filters = any([_f_project, _f_site, _f_doctype, _f_sql])
+
             try:
-                results = self.vs.search(
-                    query,
-                    top_k=fetch_k,
-                    filter_dict=filter_dict,
-                    user_id=user_id,
-                    session_id=session_id,
-                )
-            except Exception:
+                if _has_meta_filters:
+                    print(f"[hybrid: project={_f_project!r} site={_f_site!r} doctype={_f_doctype!r} sql={_f_sql!r}] ", end="")
+                    results = self.vs.hybrid_search(
+                        query,
+                        top_k=fetch_k,
+                        user_id=user_id,
+                        session_id=session_id,
+                        project_name=_f_project,
+                        site_id=_f_site,
+                        doc_type=_f_doctype,
+                        sql_filters=_f_sql,
+                    )
+                else:
+                    results = self.vs.search(
+                        query,
+                        top_k=fetch_k,
+                        filter_dict=filter_dict,
+                        user_id=user_id,
+                        session_id=session_id,
+                    )
+            except Exception as e:
+                print(f"[hybrid_search fallback] failed due to {e}")
                 results = self.vs.search(query, top_k=fetch_k, user_id=user_id, session_id=session_id)
 
         print(f"{len(results)} vector chunks")

@@ -81,6 +81,12 @@ class AgentState(TypedDict):
     # This is the highest-priority scope signal — overrides the intent classifier.
     attached_doc_filenames: List[str]
 
+    # ── Metadata filters for hybrid search (project/site scoping) ────────
+    filter_project_name: Optional[str]
+    filter_site_id: Optional[str]
+    filter_doc_type: Optional[str]
+    sql_filters: Optional[Dict]
+
 
 # ── Shared constants ─────────────────────────────────────────────────────
 

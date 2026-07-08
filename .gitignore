@@ -75,3 +75,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 *.swp
+
+# ── Testing Datasets & Logs ─────────────────────────────────
+DATA_TEST_RAG_BIMLO_pour_Ali/
+test_output.txt
+pertinence_report.csv

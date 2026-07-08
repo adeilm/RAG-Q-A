@@ -50,6 +50,7 @@ services:
       - DATA_DIR=/data
       - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://frontend
     volumes:
+      - .:/app
       - hf_cache:/root/.cache/huggingface
       - news_cache:/data/news_cache
       - ../Frontend/public/favicon.png:/app/assets/favicon.png:ro

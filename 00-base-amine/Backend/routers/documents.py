@@ -159,6 +159,12 @@ async def upload_document(
         try:
             from datetime import datetime as _dt
             _now = _dt.utcnow().isoformat()
+
+            # Extract project metadata from chunks (set during ingestion)
+            _first_meta = chunks[0].get("metadata", {}) if chunks else {}
+            _project_name = _first_meta.get("project_name", "")
+            _site_id = _first_meta.get("site_id", "")
+
             neo4j_run(
                 """
                 MERGE (d:Document {id: $doc_id})
@@ -167,16 +173,20 @@ async def upload_document(
                     d.chunk_count   = $chunk_count,
                     d.uploaded_at   = $now,
                     d.session_id    = $session_id,
-                    d.content_hash  = $content_hash
+                    d.content_hash  = $content_hash,
+                    d.project_name  = $project_name,
+                    d.site_id       = $site_id
                 """,
                 {
-                    "doc_id":      doc_id,
-                    "filename":    file.filename,
-                    "doc_type":    ext.lstrip("."),
-                    "chunk_count": len(chunks),
-                    "now":         _now,
-                    "session_id":  session_id or "",
+                    "doc_id":       doc_id,
+                    "filename":     file.filename,
+                    "doc_type":     ext.lstrip("."),
+                    "chunk_count":  len(chunks),
+                    "now":          _now,
+                    "session_id":   session_id or "",
                     "content_hash": g.DOCUMENT_FILE_CACHE[doc_id].get('content_hash'),
+                    "project_name": _project_name,
+                    "site_id":      _site_id,
                 },
             )
             if session_id:

@@ -67,6 +67,7 @@ class DocumentProcessor:
         """
         Process a document and return text chunks with metadata.
         For PDFs: uses pdfplumber (text + tables + image descriptions).
+                  Chunks are created per-page so each chunk carries a page_number.
         For DOCX: uses python-docx (text + image descriptions).
         For TXT:  plain text read.
         For images (PNG/JPG/WEBP/GIF/etc.): vision LLM description → searchable chunks.
@@ -74,7 +75,7 @@ class DocumentProcessor:
         ext = os.path.splitext(file_path)[1].lower()
 
         if ext == ".pdf":
-            text = self._extract_pdf(file_path)
+            return self._process_pdf_paged(file_path)
         elif ext in (".docx", ".doc"):
             text = self._extract_docx(file_path)
         elif ext == ".txt":
@@ -86,6 +87,58 @@ class DocumentProcessor:
 
         metadata = self._extract_metadata(text, file_path)
         return self._create_chunks(text, metadata)
+
+    def _process_pdf_paged(self, file_path: str) -> List[Dict]:
+        """
+        Process a PDF page-by-page so every chunk gets a page_number in its metadata.
+        This enables precise citations ("see page 12") in RAG answers.
+
+        Flow:
+          1. Extract per-page text/tables/images via pdfplumber
+          2. Extract document-level metadata (doc_type, project_name, site_id)
+             from the first page using an LLM call
+          3. Chunk each page independently and tag with page_number
+        """
+        pages = self._extract_pdf_pages(file_path)
+        if not pages:
+            return []
+
+        # Build document-level metadata from the first page
+        first_page_text = pages[0]["text"] if pages else ""
+        full_text = "\n\n".join(p["text"] for p in pages)
+        metadata = self._extract_metadata(full_text, file_path)
+
+        all_chunks: List[Dict] = []
+        global_chunk_id = 0
+        prev_page_tail = ""  # Cross-page overlap buffer
+
+        for page_info in pages:
+            page_num = page_info["page_number"]
+            page_text = page_info["text"]
+            if not page_text.strip():
+                continue
+
+            # Prepend tail of the previous page for cross-page semantic continuity.
+            # This ensures paragraphs/tables that break across pages aren't lost.
+            if prev_page_tail:
+                page_text = prev_page_tail + " " + page_text
+
+            # Save the last 200 chars of this page for the next page's overlap
+            prev_page_tail = page_text.strip()[-200:] if len(page_text.strip()) > 200 else page_text.strip()
+
+            page_meta = metadata.copy()
+            page_meta["page_number"] = page_num
+
+            page_chunks = self._create_chunks(page_text, page_meta)
+
+            # Re-number chunk_ids to be globally unique across all pages
+            for chunk in page_chunks:
+                chunk["chunk_id"] = global_chunk_id
+                global_chunk_id += 1
+
+            all_chunks.extend(page_chunks)
+
+        return all_chunks
 
     def process_image_bytes(self, image_bytes: bytes, filename: str) -> List[Dict]:
         """
@@ -218,34 +271,36 @@ class DocumentProcessor:
 
     # ── Text extraction ───────────────────────────────────────────────────
 
-    def _extract_pdf(self, file_path: str) -> str:
+    def _extract_pdf_pages(self, file_path: str) -> List[Dict]:
         """
-        Extract text + tables + image descriptions from a PDF using pdfplumber.
+        Extract text + tables + image descriptions from a PDF, page by page.
 
-        Per page:
-          1. pdfplumber.extract_text()  → body text (much cleaner than PyPDF2)
-          2. pdfplumber.extract_tables() → each table formatted as pipe-separated rows
-          3. pdfplumber images           → PIL Image → vision LLM → description injected
+        Returns a list of dicts, one per page:
+            [{"page_number": 1, "text": "..."},
+             {"page_number": 2, "text": "..."},
+             ...]
 
-        Falls back to PyPDF2 if pdfplumber is not installed.
+        Falls back to PyPDF2 (as a single "page 1" blob) if pdfplumber is missing.
         """
         try:
             import pdfplumber
         except ImportError:
             print("⚠️  pdfplumber not installed — falling back to PyPDF2. "
                   "Run: pip install pdfplumber")
-            return self._extract_pdf_pypdf2(file_path)
+            text = self._extract_pdf_pypdf2(file_path)
+            return [{"page_number": 1, "text": text}] if text else []
 
-        full_text_parts: List[str] = []
+        pages: List[Dict] = []
 
         try:
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages, start=1):
+                    page_parts: List[str] = []
 
                     # ── 1. Body text ──────────────────────────────────────
                     body = page.extract_text() or ""
                     if body.strip():
-                        full_text_parts.append(f"[page {page_num}]\n{body}")
+                        page_parts.append(body)
 
                     # ── 2. Tables ─────────────────────────────────────────
                     tables = page.extract_tables() or []
@@ -258,18 +313,23 @@ class DocumentProcessor:
                             table_lines.append(" | ".join(row_cells))
                         table_text = "\n".join(table_lines)
                         if table_text.strip():
-                            full_text_parts.append(f"[TABLE on page {page_num}]\n{table_text}")
+                            page_parts.append(f"[TABLE on page {page_num}]\n{table_text}")
 
                     # ── 3. Images → vision description ────────────────────
                     if not self._skip_vision:
                         image_descriptions = self._describe_page_images(page, page_num)
-                        full_text_parts.extend(image_descriptions)
+                        page_parts.extend(image_descriptions)
+
+                    page_text = "\n\n".join(page_parts)
+                    if page_text.strip():
+                        pages.append({"page_number": page_num, "text": page_text})
 
         except Exception as e:
             print(f"Error extracting PDF with pdfplumber: {e}")
-            return self._extract_pdf_pypdf2(file_path)
+            text = self._extract_pdf_pypdf2(file_path)
+            return [{"page_number": 1, "text": text}] if text else []
 
-        return "\n\n".join(full_text_parts)
+        return pages
 
     def _extract_pdf_pypdf2(self, file_path: str) -> str:
         """Legacy PyPDF2 fallback — text only, no tables, no images."""
@@ -548,14 +608,134 @@ class DocumentProcessor:
     # ── Metadata extraction ───────────────────────────────────────────────
 
     def _extract_metadata(self, text: str, file_path: str) -> Dict:
+        """
+        Extract document-level metadata: doc_type, project_ref,
+        and structured fields (project_name, site_id) via a single LLM call.
+        """
         metadata = {
             "filename": os.path.basename(file_path),
-            "doc_type": self._classify_doc_type(text, file_path),
+            "doc_type": "document",
+            "project_name": "",
+            "site_id": "",
         }
+
         ref = self._extract_reference(text)
         if ref:
             metadata["project_ref"] = ref
+
+        # Unified LLM extraction: doc_type + project_name + site_id
+        llm_meta = self._extract_project_metadata(text, file_path)
+        metadata["doc_type"] = llm_meta.get("doc_type", "document")
+        metadata["project_name"] = llm_meta.get("project_name", "")
+        metadata["site_id"] = llm_meta.get("site_id", "")
+
         return metadata
+
+    def _extract_project_metadata(self, text: str, file_path: str) -> Dict:
+        """
+        Single LLM call to extract structured metadata from the document:
+          - doc_type: classification label (e.g. specification, report)
+          - project_name: the telecom/BIM project name if found
+          - site_id: site identifier, tower ID, or location code if found
+
+        Uses Groq API (primary) with CF Worker fallback.
+        Returns a dict with these three keys. Falls back to defaults
+        if the LLM is unavailable or parsing fails.
+        """
+        defaults = {"doc_type": "document", "project_name": "", "site_id": ""}
+
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        groq_model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+
+        if not groq_key and not self._api_key:
+            return defaults
+
+        snippet = text[:1200].strip()
+        filename = os.path.basename(file_path)
+
+        prompt = (
+            "You are a metadata extraction assistant for telecom and BIM documents.\n"
+            "Analyze the filename and the document excerpt below.\n"
+            "Return ONLY a valid JSON object with exactly these three keys:\n"
+            '  "doc_type": a short snake_case label (e.g. specification, technical_report, '
+            'invoice, contract, user_manual, meeting_notes, plan, calculation_note),\n'
+            '  "project_name": the project or programme name mentioned (e.g. "Orange 5G Rollout", '
+            '"SFR FttH Lot 3"). Empty string if not found,\n'
+            '  "site_id": any site identifier, tower ID, or location code '
+            '(e.g. "T-1234", "SITE-PAR-042"). Empty string if not found.\n\n'
+            f"Filename: {filename}\n"
+            f"Content preview:\n{snippet}\n\n"
+            "Reply with ONLY the JSON object. No explanation, no markdown fences."
+        )
+
+        def _parse_response(raw: str) -> Optional[Dict]:
+            """Parse LLM response JSON into metadata dict."""
+            import json
+            raw = raw.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            parsed = json.loads(raw)
+
+            doc_type = re.sub(r"[^\w]", "_", str(parsed.get("doc_type", "document"))).strip("_").lower()
+            project_name = str(parsed.get("project_name", "")).strip()
+            site_id = str(parsed.get("site_id", "")).strip()
+
+            print(
+                f"\U0001f3f7\ufe0f  Metadata extracted: doc_type={doc_type}, "
+                f"project_name={project_name!r}, site_id={site_id!r}"
+            )
+            return {
+                "doc_type": doc_type or "document",
+                "project_name": project_name,
+                "site_id": site_id,
+            }
+
+        # ── Try Groq first (primary) ──────────────────────────────────────
+        if groq_key:
+            try:
+                resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": groq_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 150,
+                        "temperature": 0.1,
+                    },
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"]
+                    result = _parse_response(raw)
+                    if result:
+                        return result
+            except Exception as e:
+                print(f"\u26a0\ufe0f  Groq metadata extraction failed: {e}")
+
+        # ── Fallback to CF Worker ─────────────────────────────────────────
+        if self._api_key:
+            try:
+                resp = requests.post(
+                    self._api_url,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"prompt": prompt, "max_tokens": 150, "task": "classify"},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    raw = (resp.json().get("response") or "").strip()
+                    result = _parse_response(raw)
+                    if result:
+                        return result
+            except Exception as e:
+                print(f"\u26a0\ufe0f  CF Worker metadata extraction failed: {e}")
+
+        return defaults
 
     def _classify_doc_type(self, text: str, file_path: str) -> str:
         """
@@ -563,6 +743,9 @@ class DocumentProcessor:
         Returns a short snake_case label (e.g. 'specification', 'report',
         'invoice', 'manual', 'contract').  Falls back to 'document' if
         the LLM is unavailable or the call fails.
+
+        NOTE: This is kept for backward compatibility. The new unified
+        _extract_project_metadata() supersedes this for fresh uploads.
         """
         if not self._api_key:
             return "document"

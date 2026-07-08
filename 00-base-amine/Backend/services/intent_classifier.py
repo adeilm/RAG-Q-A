@@ -92,6 +92,7 @@ class IntentAnalysis:
     vagueness_score:     float = 0.0  # 0.0–1.0, how ambiguous the query is
     full_scope:          bool = False  # True = query needs ALL chunks, not just top_k
     needs_summary:       bool = False  # True = explicit summary/analysis request (→ full_doc_node)
+    sql_filters:         Dict = field(default_factory=dict)  # extracted structural parameters
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -187,7 +188,13 @@ TASK — output ONLY this JSON object, no preamble, no backticks:
   "confidence": <0.0–1.0>,
   "doc_scope": "<exact filename from the uploaded docs list if the user clearly targets ONE specific document; positional hint like 'first' or 'second' if they reference position; empty string if they want ALL docs or the scope is unclear>",
   "reasoning": "<2–4 sentence chain-of-thought: what signals did you see, why did you pick this route, and which document (if any) are they targeting>",
-  "clarification_options": ["<option 1>", "<option 2>", "<option 3>"]
+  "clarification_options": ["<option 1>", "<option 2>", "<option 3>"],
+  "sql_filters": {{
+      "hauteur_min": "<float if specified, else null>",
+      "hauteur_max": "<float if specified, else null>",
+      "type_pylone": "<string like 'mât', 'treillis', etc if specified, else null>",
+      "projet": "<exact project name like 'Tunis-A45' if the user strictly asks to search ONLY in a specific project, else null>"
+  }}
 }}
 
 ROUTING RULES (apply these strictly when choosing suggested_route):
@@ -1065,6 +1072,7 @@ def _make_heuristic(
         classification_path = "heuristic",
         latency_ms        = 0.0,
         clarification_options = [],
+        sql_filters       = {},
     )
 
 
@@ -1116,6 +1124,13 @@ def _parse_llm_result(raw: str) -> IntentAnalysis:
     else:
         clarification_options = []
 
+    sql_filters = data.get("sql_filters", {})
+    if not isinstance(sql_filters, dict):
+        sql_filters = {}
+        
+    # Remove None values
+    sql_filters = {k: v for k, v in sql_filters.items() if v is not None}
+
     return IntentAnalysis(
         primary_intent    = str(data.get("primary_intent", "extract_info")),
         secondary_intent  = str(data.get("secondary_intent", "")),
@@ -1136,6 +1151,7 @@ def _parse_llm_result(raw: str) -> IntentAnalysis:
         classification_path = "llm",
         latency_ms        = 0.0,
         clarification_options = clarification_options,
+        sql_filters       = sql_filters,
     )
 
 

@@ -75,6 +75,9 @@ class VectorStoreManager:
                 return ""
             return hashlib.sha256(s.encode()).hexdigest()[:12]
         
+        if session_id == "global":
+            return "global"
+        
         if user_id and session_id:
             u_hash = _hash(user_id)
             s_hash = _hash(session_id)
@@ -197,46 +200,145 @@ class VectorStoreManager:
         filter_dict: Optional[Dict] = None,
     ) -> List[Dict]:
         """
-        Semantic search within a user/session's collection.
-        
-        Only returns chunks from that specific user/session — no cross-user leakage.
+        Semantic search within a user/session's collection, AND the global collection.
         
         Args:
             query: Search query text
             top_k: Number of results to return
             user_id: User ID (optional)
             session_id: Session ID (optional)
-            filter_dict: Additional ChromaDB where filter (AND'd with user/session scope)
+            filter_dict: Additional ChromaDB where filter
         
         Returns:
             List of dicts with text, metadata, distance, id, has_images, has_tables
         """
-        collection = self._get_collection(user_id, session_id)
+        collections_to_search = [self._get_collection(user_id, session_id)]
+        
+        # If we are searching a specific session, also search the global collection
+        if session_id and session_id != "global":
+            collections_to_search.append(self._get_collection(None, "global"))
+            
         query_embedding = self.embedding_model.encode(query).tolist()
-        
         where = {**(filter_dict or {})}
-        # The where filter is already scoped to this collection implicitly,
-        # but we can add extra filters if needed
         
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            where=where if where else None,
+        all_formatted = []
+        for collection in collections_to_search:
+            # Skip empty collections to avoid ChromaDB errors
+            if collection.count() == 0:
+                continue
+                
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=top_k,
+                where=where if where else None,
+            )
+            
+            if results.get("documents") and results["documents"][0]:
+                for i in range(len(results["documents"][0])):
+                    meta = results["metadatas"][0][i]
+                    all_formatted.append({
+                        "text":       results["documents"][0][i],
+                        "metadata":   meta,
+                        "distance":   results["distances"][0][i] if "distances" in results else 999.0,
+                        "id":         results["ids"][0][i],
+                        "has_images": meta.get("has_images", False),
+                        "has_tables": meta.get("has_tables", False),
+                    })
+                    
+        # Sort combined results by distance (lower is better in Chroma cosine distance)
+        all_formatted.sort(key=lambda x: x["distance"] if x["distance"] is not None else 999.0)
+        
+        return all_formatted[:top_k]
+
+    def hybrid_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+        site_id: Optional[str] = None,
+        doc_type: Optional[str] = None,
+        page_number: Optional[int] = None,
+        sql_filters: Optional[Dict] = None,
+    ) -> List[Dict]:
+        """
+        Semantic search with metadata pre-filtering AND SQLite structured search.
+
+        If `sql_filters` is provided, it dynamically queries the local SQLite DB 
+        (`bimlo_projects.db`) to find matching projects, then scopes the ChromaDB 
+        semantic search exclusively to those projects.
+        """
+        conditions = []
+        
+        # 1. Evaluate SQL structured filters against SQLite
+        if sql_filters:
+            import sqlite3
+            try:
+                db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'bimlo_projects.db')
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                sql = "SELECT DISTINCT projets.code_projet FROM projets LEFT JOIN pylones ON projets.id = pylones.projet_id WHERE 1=1"
+                params = []
+                
+                # Dynamic SQL building based on common filters
+                if "hauteur_min" in sql_filters:
+                    sql += " AND pylones.hauteur_m >= ?"
+                    params.append(sql_filters["hauteur_min"])
+                if "hauteur_max" in sql_filters:
+                    sql += " AND pylones.hauteur_m <= ?"
+                    params.append(sql_filters["hauteur_max"])
+                if "type_pylone" in sql_filters:
+                    sql += " AND LOWER(pylones.type_pylone) LIKE ?"
+                    params.append(f"%{sql_filters['type_pylone'].lower()}%")
+                if "projet" in sql_filters:
+                    sql += " AND LOWER(projets.code_projet) LIKE ?"
+                    params.append(f"%{sql_filters['projet'].lower()}%")
+                
+                cursor.execute(sql, params)
+                matching_projects = [row[0] for row in cursor.fetchall()]
+                conn.close()
+                
+                if not matching_projects:
+                    # SQL filters were strict but no projects matched; return empty
+                    print(f"⚠️ [hybrid_search] SQL filter returned 0 projects. SQL={sql} Params={params}")
+                    return []
+                    
+                # Pass the matched project IDs to ChromaDB
+                print(f"[hybrid_search] SQL filter matched {len(matching_projects)} projects: {matching_projects}")
+                if len(matching_projects) == 1:
+                    conditions.append({"site_id": {"$eq": matching_projects[0]}})
+                else:
+                    conditions.append({"site_id": {"$in": matching_projects}})
+                    
+            except Exception as e:
+                print(f"⚠️ [hybrid_search] SQL execution failed: {e}")
+
+        # 2. Add standard metadata filters
+        if project_name:
+            conditions.append({"project_name": {"$eq": project_name}})
+        if site_id and not sql_filters: # avoid collision if sql_filters set site_id
+            conditions.append({"site_id": {"$eq": site_id}})
+        if doc_type:
+            conditions.append({"doc_type": {"$eq": doc_type}})
+        if page_number is not None:
+            conditions.append({"page_number": {"$eq": page_number}})
+
+        if len(conditions) > 1:
+            where = {"$and": conditions}
+        elif len(conditions) == 1:
+            where = conditions[0]
+        else:
+            where = None
+
+        return self.search(
+            query=query,
+            top_k=top_k,
+            user_id=user_id,
+            session_id=session_id,
+            filter_dict=where,
         )
-        
-        formatted: List[Dict] = []
-        if results.get("documents") and results["documents"][0]:
-            for i in range(len(results["documents"][0])):
-                meta = results["metadatas"][0][i]
-                formatted.append({
-                    "text":       results["documents"][0][i],
-                    "metadata":   meta,
-                    "distance":   results["distances"][0][i] if "distances" in results else None,
-                    "id":         results["ids"][0][i],
-                    "has_images": meta.get("has_images", False),
-                    "has_tables": meta.get("has_tables", False),
-                })
-        return formatted
 
     def delete_document(self, doc_id: str, user_id: Optional[str] = None, session_id: Optional[str] = None):
         """
@@ -279,9 +381,15 @@ class VectorStoreManager:
     def has_documents(self, user_id: Optional[str] = None, session_id: Optional[str] = None) -> bool:
         """
         Return True if the user/session's collection contains any documents.
+        Also returns True if the global collection has documents (for Copilot fallback).
         """
         collection = self._get_collection(user_id, session_id)
-        return collection.count() > 0
+        if collection.count() > 0:
+            return True
+            
+        # Fallback check global collection
+        global_collection = self._get_collection(None, "global")
+        return global_collection.count() > 0
 
     def get_all_chunks(self, filename: str, user_id: Optional[str] = None, session_id: Optional[str] = None) -> List[Dict]:
         """

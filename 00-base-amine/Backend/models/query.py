@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 
 class QueryRequest(BaseModel):
@@ -12,6 +12,11 @@ class QueryRequest(BaseModel):
     pending_doc_ids:        Optional[List[str]] = None
     preferred_provider:     Optional[str]  = None
     attached_doc_filenames: Optional[List[str]] = None
+    # ── Metadata filters for hybrid search ──────────────────
+    project_name:           Optional[str]  = None
+    site_id:                Optional[str]  = None
+    filter_doc_type:        Optional[str]  = None
+    sql_filters:            Optional[Dict] = None
 
 
 class QueryResponse(BaseModel):
