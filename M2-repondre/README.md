@@ -18,7 +18,7 @@ Répondre aux questions techniques avec citation de la source, et retrouver des 
 
 ## ✅ Tâches
 
-- [x] Recherche hybride (sémantique + valeurs structurées) — `vector_store.hybrid_search()` : filtre SQLite (`bimlo_projects.db`) sur les paramètres structurés (hauteur, type_pylône, projet) puis recherche sémantique ChromaDB scopée aux projets retenus.
+- [x] Recherche hybride (sémantique + valeurs structurées) — `vector_store.hybrid_search()` : filtre **PostgreSQL** (schéma canonique de Mohamed, tables `projets`/`pylones`) sur les paramètres structurés (hauteur, type_pylône, projet) puis recherche sémantique ChromaDB scopée aux projets retenus. ✅ Verrouillage vérifié sur les 24 projets réels (ex. `type_pylone='mât braconné'` → 11 projets ; `projet='ESTER'` → 1 ; projet absent → 0 chunk, pas de fuite).
 - [x] Citations précises (site, document, page) — extraction PDF page-par-page (`page_number` par chunk) + `project_name`/`site_id` en métadonnée ; exposés dans les en-têtes `[Source N]` et les cartes de sources renvoyées.
 - [x] Filtres par projet / site — champs `project_name` / `site_id` / `filter_doc_type` sur `QueryRequest`, propagés jusqu'au nœud de récupération.
 - [x] Recherche de projets similaires — « precedent finder » : `sql_filters` (hauteur, type) extraits par le classifieur d'intention → filtre SQL → projets candidats. ⚠️ Ranking de similarité dédié encore basique (filtre exact, pas de score de proximité).
@@ -27,27 +27,35 @@ Répondre aux questions techniques avec citation de la source, et retrouver des 
 
 > **Statut MR** : cœur (recherche hybride + verrouillage projet strict) opérationnel. Restent en amélioration : ranking de similarité dédié, et remplacement du dataset Golden provisoire par les cas réels.
 
-## ▶️ Reproduire en local
+## ▶️ Reproduire en local (Docker)
+
+Le store structuré est **PostgreSQL** (conteneur `postgres` dans `docker-compose.yml`).
+Le schéma (`db/init/*.sql`) est appliqué automatiquement au premier démarrage.
+Les JSON projets réels (dossier `DATA_TEST_RAG_BIMLO_pour_Ali/donnees_json`, gitignored)
+sont montés en lecture seule sur `/app/data/donnees_json`.
 
 ```bash
 cd 00-base-amine/Backend
 
-# 1. Créer le schéma SQLite structuré (projets, pylônes, notes de calcul…)
-python scripts/init_db.py               # → data/bimlo_projects.db
+# 1. Démarrer toute la stack (postgres + neo4j + chroma + api)
+docker compose up -d --build           # 1re fois : build (installe psycopg2, etc.)
 
-# 2. Ingérer les JSON projets (SQLite + ChromaDB global)
-#    JSON attendus dans le dossier data/donnees_json/ (voir JSON_DIR dans le script)
-python scripts/ingest_json.py
+# 2. Ingérer les 24 projets → PostgreSQL (projets/pylônes/NC) + ChromaDB (embeddings)
+docker exec backend-api-1 python scripts/ingest_json.py
 
-# 3. Lancer l'API
-uvicorn main:app --reload               # http://localhost:8000
+# (schéma déjà auto-appliqué ; pour le ré-appliquer manuellement :)
+# docker exec backend-api-1 python scripts/init_db.py
 
-# 4a. Tests fumée hybride (nécessite l'API démarrée)
-python scripts/test_final_m2.py
+# 3a. Vérifier le verrouillage hybride (filtre SQL → scope ChromaDB)
+docker exec backend-api-1 python scripts/test_final_m2.py
 
-# 4b. Suite de pertinence + rapport CSV
-pytest tests/test_pertinence.py -v -s   # → pertinence_report.csv
+# 3b. Suite de pertinence + rapport CSV
+docker exec backend-api-1 pytest tests/test_pertinence.py -v -s   # → pertinence_report.csv
 ```
+
+> **Env** : `POSTGRES_HOST/PORT/DB/USER/PASSWORD` (voir `.env.example`). En Docker
+> l'API pointe sur le service `postgres` ; en exécution hors conteneur, mettre
+> `POSTGRES_HOST=localhost`.
 
 ## 📤 Livrables
 

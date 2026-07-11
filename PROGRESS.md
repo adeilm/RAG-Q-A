@@ -74,7 +74,7 @@
 
 | Date | Auteur | Module | Note |
 |------|--------|:------:|------|
-| 2026-07-11 | M. A. Abid | M2 | ✅ Recherche hybride (SQLite + ChromaDB), verrouillage projet strict, citations page/site, suite de pertinence (LLM-judge). Prêt pour MR (améliorations restantes : ranking similarité, dataset Golden réel). |
+| 2026-07-11 | M. A. Abid | M2 | ✅ Migration vers **PostgreSQL** (schéma canonique) ; recherche hybride vérifiée sur 24 projets réels (verrouillage projet/type strict, 0 fuite) ; citations page/site ; suite de pertinence (LLM-judge). Restant : enrichir `pylones.hauteur_m` (souvent NULL, valeur dans `donnees_extraites`), ranking de similarité, dataset Golden réel. |
 | 2026-07-01 | M. Massoudi | — | 🚀 Lancement du projet, prise en main du dépôt |
 
 ---

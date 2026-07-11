@@ -263,57 +263,59 @@ class VectorStoreManager:
         sql_filters: Optional[Dict] = None,
     ) -> List[Dict]:
         """
-        Semantic search with metadata pre-filtering AND SQLite structured search.
+        Semantic search with metadata pre-filtering AND PostgreSQL structured search.
 
-        If `sql_filters` is provided, it dynamically queries the local SQLite DB 
-        (`bimlo_projects.db`) to find matching projects, then scopes the ChromaDB 
-        semantic search exclusively to those projects.
+        If `sql_filters` is provided, it dynamically queries the shared Postgres DB
+        (projets/pylones tables) to find matching project codes, then scopes the
+        ChromaDB semantic search exclusively to those projects.
         """
         conditions = []
-        
-        # 1. Evaluate SQL structured filters against SQLite
+
+        # 1. Evaluate SQL structured filters against PostgreSQL
         if sql_filters:
-            import sqlite3
+            from services.db import get_pg_conn
             try:
-                db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'bimlo_projects.db')
-                conn = sqlite3.connect(db_path)
+                conn = get_pg_conn()
                 cursor = conn.cursor()
-                
-                sql = "SELECT DISTINCT projets.code_projet FROM projets LEFT JOIN pylones ON projets.id = pylones.projet_id WHERE 1=1"
+
+                # %s placeholders (psycopg2). Columns exist in the canonical schema.
+                sql = ("SELECT DISTINCT projets.code_projet "
+                       "FROM projets LEFT JOIN pylones ON projets.id = pylones.projet_id "
+                       "WHERE 1=1")
                 params = []
-                
+
                 # Dynamic SQL building based on common filters
                 if "hauteur_min" in sql_filters:
-                    sql += " AND pylones.hauteur_m >= ?"
+                    sql += " AND pylones.hauteur_m >= %s"
                     params.append(sql_filters["hauteur_min"])
                 if "hauteur_max" in sql_filters:
-                    sql += " AND pylones.hauteur_m <= ?"
+                    sql += " AND pylones.hauteur_m <= %s"
                     params.append(sql_filters["hauteur_max"])
                 if "type_pylone" in sql_filters:
-                    sql += " AND LOWER(pylones.type_pylone) LIKE ?"
-                    params.append(f"%{sql_filters['type_pylone'].lower()}%")
+                    sql += " AND pylones.type_pylone ILIKE %s"
+                    params.append(f"%{sql_filters['type_pylone']}%")
                 if "projet" in sql_filters:
-                    sql += " AND LOWER(projets.code_projet) LIKE ?"
-                    params.append(f"%{sql_filters['projet'].lower()}%")
-                
+                    sql += " AND projets.code_projet ILIKE %s"
+                    params.append(f"%{sql_filters['projet']}%")
+
                 cursor.execute(sql, params)
                 matching_projects = [row[0] for row in cursor.fetchall()]
                 conn.close()
-                
+
                 if not matching_projects:
                     # SQL filters were strict but no projects matched; return empty
                     print(f"⚠️ [hybrid_search] SQL filter returned 0 projects. SQL={sql} Params={params}")
                     return []
-                    
+
                 # Pass the matched project IDs to ChromaDB
                 print(f"[hybrid_search] SQL filter matched {len(matching_projects)} projects: {matching_projects}")
                 if len(matching_projects) == 1:
                     conditions.append({"site_id": {"$eq": matching_projects[0]}})
                 else:
                     conditions.append({"site_id": {"$in": matching_projects}})
-                    
+
             except Exception as e:
-                print(f"⚠️ [hybrid_search] SQL execution failed: {e}")
+                print(f"⚠️ [hybrid_search] Postgres execution failed: {e}")
 
         # 2. Add standard metadata filters
         if project_name:

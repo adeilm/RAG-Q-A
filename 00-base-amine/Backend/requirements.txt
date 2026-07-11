@@ -6,6 +6,9 @@ python-multipart==0.0.27
 # Vector store
 chromadb==0.4.22
 
+# Structured store (M2 hybrid search)
+psycopg2-binary==2.9.9
+
 # Embeddings & reranking
 sentence-transformers==2.3.1
 

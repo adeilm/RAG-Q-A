@@ -1,112 +1,43 @@
-import sqlite3
-import os
+"""
+init_db.py — create the M2 structured schema in PostgreSQL.
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'bimlo_projects.db')
+In Docker the postgres container auto-runs db/init/*.sql on first boot, so you
+normally don't need this. Use it to (re)apply the schema manually against an
+already-running Postgres (all statements are IF NOT EXISTS, so it's idempotent):
+
+    docker exec backend-api-1 python scripts/init_db.py
+
+Env: POSTGRES_* connection (see services/db.py).
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from services.db import get_pg_conn
+
+INIT_DIR = os.path.join(os.path.dirname(__file__), '..', 'db', 'init')
+SQL_FILES = ["01_init.sql", "02_index.sql"]
+
 
 def init_db():
-    # Ensure data directory exists
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
-    print(f"Initialising database at {DB_PATH}...")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_pg_conn()
+    conn.autocommit = True
     cursor = conn.cursor()
 
-    # Table 1: projets
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS projets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code_projet TEXT UNIQUE NOT NULL,
-        nom TEXT NOT NULL,
-        client TEXT,
-        localisation TEXT,
-        statut TEXT DEFAULT 'en_cours',
-        description TEXT,
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP,
-        date_maj DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
+    for name in SQL_FILES:
+        path = os.path.join(INIT_DIR, name)
+        if not os.path.exists(path):
+            print(f"⚠️  {path} not found — skipping")
+            continue
+        print(f"Applying {name}...")
+        with open(path, "r", encoding="utf-8") as f:
+            cursor.execute(f.read())
 
-    # Table 2: pylones
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS pylones (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
-        nom TEXT NOT NULL,
-        type_pylone TEXT,
-        hauteur_m REAL,
-        charge_admissible_kn REAL,
-        date_installation DATE,
-        etat TEXT DEFAULT 'a_verifier',
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    # Table 3: notes_de_calcul
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS notes_de_calcul (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
-        pylone_id INTEGER REFERENCES pylones(id) ON DELETE SET NULL,
-        nom_fichier TEXT NOT NULL,
-        chemin_fichier TEXT,
-        version TEXT,
-        ingenieur_responsable TEXT,
-        contenu_extrait TEXT, -- Stored as JSON string
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    # Table 4: plans
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS plans (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
-        pylone_id INTEGER REFERENCES pylones(id) ON DELETE SET NULL,
-        nom_fichier TEXT NOT NULL,
-        chemin_fichier TEXT,
-        type_plan TEXT,
-        echelle TEXT,
-        nombre_pages INTEGER,
-        contenu_extrait TEXT, -- Stored as JSON string
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    # Table 5: elements_structure
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS elements_structure (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
-        pylone_id INTEGER REFERENCES pylones(id) ON DELETE SET NULL,
-        reference TEXT NOT NULL,
-        profil TEXT,
-        longueur_mm REAL,
-        masse_kg REAL,
-        quantite INTEGER DEFAULT 1,
-        materiau TEXT,
-        source TEXT,
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    # Table 6: anomalies
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS anomalies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        projet_id INTEGER NOT NULL REFERENCES projets(id) ON DELETE CASCADE,
-        pylone_id INTEGER REFERENCES pylones(id) ON DELETE SET NULL,
-        type_anomalie TEXT NOT NULL,
-        gravite TEXT,
-        description TEXT,
-        statut TEXT DEFAULT 'ouverte',
-        date_detection DATE,
-        date_creation DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-
-    conn.commit()
     conn.close()
-    print("Database initialised successfully.")
+    print("✅ Database schema initialised successfully.")
+
 
 if __name__ == "__main__":
     init_db()

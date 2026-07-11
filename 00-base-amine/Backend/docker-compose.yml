@@ -6,6 +6,26 @@ services:
     ports:
       - "8001:8000"
 
+  # Structured Database (M2 hybrid search — projets/pylones/notes_de_calcul…)
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bimlo}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bimlo}
+      - POSTGRES_DB=${POSTGRES_DB:-bimlo}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Canonical schema (tables + indexes) auto-applied on first boot
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bimlo} -d ${POSTGRES_DB:-bimlo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   # Graph Database
   neo4j:
     image: neo4j:latest
@@ -40,6 +60,11 @@ services:
       # Overrides — these must differ from .env or are path-specific
       - CHROMA_HOST=chroma
       - NEO4J_URI=bolt://neo4j:7687
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-bimlo}
+      - POSTGRES_USER=${POSTGRES_USER:-bimlo}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bimlo}
       - WIKI_USER_AGENT=BimloRAG/1.0
       - HF_HOME=/root/.cache/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface/sentence_transformers
@@ -55,11 +80,15 @@ services:
       - news_cache:/data/news_cache
       - ../Frontend/public/favicon.png:/app/assets/favicon.png:ro
       - ../Frontend/public/favicon.svg:/app/assets/favicon.svg:ro
+      # Real project dataset (gitignored, confidential) → where ingest_json.py reads
+      - ../../DATA_TEST_RAG_BIMLO_pour_Ali/donnees_json:/app/data/donnees_json:ro
     depends_on:
       neo4j:
         condition: service_healthy
       chroma:
         condition: service_started
+      postgres:
+        condition: service_healthy
 
   # Doppler-powered backend (production):
   #   Injects secrets at runtime instead of using .env file.
@@ -87,5 +116,6 @@ services:
 volumes:
   chroma_data:
   neo4j_data:
+  pg_data:
   hf_cache:
   news_cache:
