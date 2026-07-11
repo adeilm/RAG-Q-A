@@ -95,15 +95,34 @@ def run_ingestion():
         projet_id = cursor.fetchone()[0]
         n_projects += 1
 
-        # -- SQL INSERT PYLONES --
+        # Structured values (hauteur_m, type_structure) often live in the NC's
+        # donnees_extraites rather than in pylones[]. Build a project-level
+        # fallback so the hybrid-search height/type filters actually have data.
+        ncs = data.get("notes_de_calcul", [])
+        dext_hauteur = next(
+            (nc.get("donnees_extraites", {}).get("hauteur_m")
+             for nc in ncs if nc.get("donnees_extraites", {}).get("hauteur_m") is not None),
+            None,
+        )
+        dext_type = next(
+            (nc.get("donnees_extraites", {}).get("type_structure")
+             for nc in ncs if nc.get("donnees_extraites", {}).get("type_structure")),
+            None,
+        )
+
+        # -- SQL INSERT PYLONES (enriched from donnees_extraites when missing) --
         for pyl in data.get("pylones", []):
+            hauteur = pyl.get("hauteur_m")
+            if hauteur is None:
+                hauteur = dext_hauteur
+            type_pyl = pyl.get("type_pylone") or dext_type
             cursor.execute(
                 """
                 INSERT INTO pylones (projet_id, nom, type_pylone, hauteur_m,
                                      charge_admissible_kn, date_installation, etat)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (projet_id, pyl.get("nom"), pyl.get("type_pylone"), pyl.get("hauteur_m"),
+                (projet_id, pyl.get("nom"), type_pyl, hauteur,
                  pyl.get("charge_admissible_kn"), pyl.get("date_installation"), pyl.get("etat")),
             )
 
