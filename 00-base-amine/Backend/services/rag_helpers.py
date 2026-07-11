@@ -212,6 +212,10 @@ def _build_sources_from_brackets(
             "filename":      metadata.get("filename", "Unknown"),
             "doc_type":      metadata.get("doc_type", "unknown"),
             "project_ref":   metadata.get("project_ref"),
+            # ── Precise citation fields (M2): site + page ──────────────
+            "project_name":  metadata.get("project_name"),
+            "site_id":       metadata.get("site_id"),
+            "page_number":   metadata.get("page_number"),
             "excerpt":       excerpt,
             "sections":      sections,
             "cited_facts":   all_lines[:10],
@@ -309,6 +313,16 @@ def _build_context(chunks: List[Dict]) -> str:
         if m.get("has_tables"):
             flags.append("has table data")
         flag_str = f" | {', '.join(flags)}" if flags else ""
+        # Precise-citation locators (M2): expose site + page in the header so the
+        # LLM can cite them in-text (e.g. "…as stated on page 12").
+        loc_bits = []
+        if m.get("project_name"):
+            loc_bits.append(f"project: {m.get('project_name')}")
+        if m.get("site_id"):
+            loc_bits.append(f"site: {m.get('site_id')}")
+        if m.get("page_number") is not None:
+            loc_bits.append(f"page {m.get('page_number')}")
+        loc_str = f" | {', '.join(loc_bits)}" if loc_bits else ""
         chunk_text = c['text']
         # Use full text for smaller chunks; cap very large ones to avoid context overflow
         # 3000 chars ~ 750 tokens — safe for most LLMs with 5 chunks
@@ -320,7 +334,7 @@ def _build_context(chunks: List[Dict]) -> str:
         if m.get("has_tables") and "[TABLE " in display_text:
             hint += "\n[TABLE DATA: This chunk contains tabular data — you may reorganize or summarize it in a cleaner table format]"
         parts.append(
-            f"[Source {i} | {m.get('filename')} | {m.get('doc_type')}{flag_str}]\n"
+            f"[Source {i} | {m.get('filename')} | {m.get('doc_type')}{loc_str}{flag_str}]\n"
             f"{display_text}{hint}"
         )
     return "\n\n".join(parts)

@@ -36,7 +36,7 @@
 | Module | Responsable | Phase(s) | Avancement | Statut |
 |--------|-------------|:--------:|:----------:|:------:|
 | 🗂️ **M1-socle-data** | Bara Ben Khedher | P0·P1·P4 | `⬜⬜⬜⬜⬜` 0 % | 🟠 |
-| 💬 **M2-repondre** | Mohamed Ali Abid | P1 | `⬜⬜⬜⬜⬜` 0 % | 🟠 |
+| 💬 **M2-repondre** | Mohamed Ali Abid | P1 | `🟩🟩🟩🟩⬜` 80 % | 🟡 |
 | 📝 **M3-produire** | Houssem · Amine · Nour | P2 | `⬜⬜⬜⬜⬜` 0 % | 🟠 |
 | ✅ **M4-verifier** | Houssem Ben Chaabane | P3 | `⬜⬜⬜⬜⬜` 0 % | 🟠 |
 | 🖥️ **M5-interface** | Nour Rajhi | P1·P2 | `⬜⬜⬜⬜⬜` 0 % | 🟠 |
@@ -74,6 +74,7 @@
 
 | Date | Auteur | Module | Note |
 |------|--------|:------:|------|
+| 2026-07-11 | M. A. Abid | M2 | ✅ Recherche hybride (SQLite + ChromaDB), verrouillage projet strict, citations page/site, suite de pertinence (LLM-judge). Prêt pour MR (améliorations restantes : ranking similarité, dataset Golden réel). |
 | 2026-07-01 | M. Massoudi | — | 🚀 Lancement du projet, prise en main du dépôt |
 
 ---

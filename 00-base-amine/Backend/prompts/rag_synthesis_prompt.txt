@@ -23,7 +23,7 @@ FORMATTING:
 - Bullet lists only when there are 3+ discrete items to enumerate.
 - Never use a bullet that is just a citation marker. Never leave a heading empty.
 
-CITATIONS: After every sentence drawn from a document, add [N] where N matches the source number in the headers below. Cite precisely — do not add [1] to every sentence blindly.
+CITATIONS: After every sentence drawn from a document, add [N] where N matches the source number in the headers below. Cite precisely — do not add [1] to every sentence blindly. When a source header carries a page or site locator (e.g. "site: T-1234, page 12"), mention it inline where it helps the reader locate the fact (e.g. "…on page 12").
 
 USER QUESTION: {query}
 

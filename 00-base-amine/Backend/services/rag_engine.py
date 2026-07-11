@@ -748,7 +748,8 @@ Now generate for: "{q}" """
             "clarification_options": getattr(intent, "clarification_options", []) or [],
             "full_scope":            full_scope,
             "needs_summary":         getattr(intent, "needs_summary", False),
-            "sql_filters":           getattr(intent, "sql_filters", {}),
+            # Intent-extracted filters win; fall back to request-provided ones if empty
+            "sql_filters":           getattr(intent, "sql_filters", {}) or state.get("sql_filters") or {},
         }
 
     def direct_answer(self, state: AgentState) -> AgentState:

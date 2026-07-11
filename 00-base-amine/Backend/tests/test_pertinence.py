@@ -31,8 +31,16 @@ TEST_USERNAME = f"pertinence_{_RUN_ID}"
 TEST_PASSWORD = "pytest_password_123"
 
 # ── 1. The Golden Dataset ─────────────────────────────────────────────────────
-# We are using dummy questions based on the regression test document until
-# real PDFs and questions are provided by the CEO.
+# ⚠️  PROVISIONAL DATASET — NOT the final acceptance set.
+# These are placeholder Q&A built on the regression test document. Replace with
+# the real project PDFs + validated questions once provided by the CEO / BIMLO.
+#
+# To swap in the real set: edit GOLDEN_TEST_CASES below (or load it from a JSON
+# file), keeping the same shape: {id, question, expected_facts[], expected_document}.
+# Raise PASS_THRESHOLD once the real set is stable (currently 50% for CI to pass
+# on the placeholder data).
+PASS_THRESHOLD = 50  # % — provisional; increase with the real Golden set
+
 GOLDEN_TEST_CASES = [
     {
         "id": "TC-01",
@@ -203,5 +211,5 @@ def test_pertinence_suite(auth_token):
     print(f"📄 CSV Report generated at: {csv_path}")
     print("="*80 + "\n")
     
-    # Assert that we have at least 50% accuracy for the CI to pass (can be increased later)
-    assert accuracy >= 50, f"Accuracy too low: {accuracy}%"
+    # Assert against the provisional threshold (raise with the real Golden set)
+    assert accuracy >= PASS_THRESHOLD, f"Accuracy too low: {accuracy}% (threshold {PASS_THRESHOLD}%)"
