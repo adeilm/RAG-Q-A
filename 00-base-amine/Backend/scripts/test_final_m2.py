@@ -16,7 +16,8 @@ async def test_query(test_name: str, query: str):
         "preferred_provider": "groq"
     }
     
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    # Long timeout: reranker over a large global corpus can take several minutes
+    async with httpx.AsyncClient(timeout=600.0) as client:
         try:
             response = await client.post(API_URL, json=payload)
             response.raise_for_status()
