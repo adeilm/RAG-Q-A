@@ -15,7 +15,7 @@
 | Recherche hybride (sémantique + valeurs structurées) | ✅ | `vector_store.hybrid_search()` : filtre **PostgreSQL** (projets/pylônes) → scope la recherche ChromaDB aux projets retenus. **Vérifié sur 24 projets réels.** |
 | Citations précises (site, document, page) | ✅ | Extraction PDF page-par-page (`page_number`) + `project_name`/`site_id` ; exposés dans les cartes de sources et cités en clair dans la réponse. **Vérifié bout-en-bout.** |
 | Filtres par projet / site | ✅ | Champs `project_name` / `site_id` / `type` / `hauteur` propagés jusqu'à la récupération. |
-| Recherche de projets similaires | ✅ | `precedent.find_similar_projects()` : **score de proximité** explicable (type + proximité hauteur + Jaccard normes/matériaux). Vérifié : 36 m triangulaire → ESTER/NEVILLE 1.0, treillis 24 m 0.7. ⚠️ Un critère est ignoré quand la donnée manque (hauteur NULL sur 17/24) → à exposer via une route dédiée (étape fine restante). |
+| Recherche de projets similaires | ✅ | `precedent.find_similar_projects()` exposé via **`POST /precedents`** : **score de proximité** explicable (type + proximité hauteur + Jaccard normes/matériaux). Vérifié bout-en-bout (36 m triangulaire → ESTER/NEVILLE 1.0, treillis 24 m 0.7 ; 422 si aucun critère ; visible dans `/docs`). ⚠️ Un critère est ignoré quand la donnée manque (hauteur NULL sur 17/24). |
 | Endpoint de requête + streaming | ✅ | `POST /query` (streaming existant), filtres câblés. |
 | Jeu de tests de pertinence (Q&A) | 🟡 | Framework prêt (`tests/test_pertinence.py`, LLM-as-judge + rapport CSV). Dataset Golden encore provisoire (placeholders). |
 
@@ -51,8 +51,8 @@
 ## 🔜 Prochaines étapes (dans le périmètre M2)
 
 1. Ouvrir la MR de `feature/m2-agentic-hybrid-search` vers `main`.
-2. Exposer `find_similar_projects()` via une route/intention dédiée (câblage fin —
-   la logique de scoring est faite et vérifiée).
+2. Corriger l'encodage à l'ingestion (JSON source en cp1252 → mojibake « pylÃ´ne »
+   dans le texte stocké) — bug de qualité de données, matching non impacté.
 
 > **Hors périmètre M2** (relève de l'intégration ou de M1) :
 > - Validation de pertinence sur le corpus réel complet → **phase d'intégration**.
