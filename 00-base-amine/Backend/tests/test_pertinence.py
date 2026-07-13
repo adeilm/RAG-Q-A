@@ -5,6 +5,14 @@ This suite runs a set of "Golden Q&A" cases against the RAG engine.
 It uses an LLM-as-a-judge to evaluate if the answer is correct based on the expected facts.
 It generates a CSV report (pertinence_report.csv) for management review.
 
+SCOPE (M2 vs integration):
+  M2 delivers the pertinence *framework* — this harness, the LLM-as-judge, and
+  the CSV quality report — plus the method to build a Golden set from data.
+  Running full validation on the complete real corpus (all modules merged) is an
+  INTEGRATION-phase activity (P4, "en continu"), owned by whoever merges the
+  branches — real project data is injected at that stage. The GOLDEN_TEST_CASES
+  below are representative placeholders until that real data is plugged in.
+
 Run:
   pytest tests/test_pertinence.py -v -s
 ═══════════════════════════════════════════════════════════════════════════════

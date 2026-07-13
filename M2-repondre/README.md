@@ -23,7 +23,7 @@ Répondre aux questions techniques avec citation de la source, et retrouver des 
 - [x] Filtres par projet / site — champs `project_name` / `site_id` / `filter_doc_type` sur `QueryRequest`, propagés jusqu'au nœud de récupération.
 - [x] Recherche de projets similaires — « precedent finder » : `sql_filters` (hauteur, type) extraits par le classifieur d'intention → filtre SQL → projets candidats. ⚠️ Ranking de similarité dédié encore basique (filtre exact, pas de score de proximité).
 - [x] Endpoint de requête + streaming — `POST /query` (streaming existant réutilisé), filtres de métadonnées câblés.
-- [x] Jeu de tests de pertinence (Q&A) — `tests/test_pertinence.py` : dataset « Golden Q&A » + LLM-as-a-judge + rapport CSV (`pertinence_report.csv`). ⚠️ Dataset actuel provisoire (placeholders) en attente des vrais PDF/questions.
+- [x] Jeu de tests de pertinence (Q&A) — `tests/test_pertinence.py` : **framework** de pertinence (harness + LLM-as-a-judge + rapport CSV `pertinence_report.csv`) + méthode de génération d'un Golden set. La validation sur le **corpus réel complet** (tous modules mergés) relève de la **phase d'intégration** (P4, données réelles injectées au merge) — le dataset actuel est un placeholder représentatif.
 
 > **Statut MR** : cœur (recherche hybride + verrouillage projet strict) opérationnel. Restent en amélioration : ranking de similarité dédié, et remplacement du dataset Golden provisoire par les cas réels.
 
