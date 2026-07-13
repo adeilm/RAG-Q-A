@@ -116,7 +116,7 @@ g.rag_engine    = RAGEngine(g.vector_store)
 
 SharedContext.set_vector_store(g.vector_store)
 
-from routers import health, documents, chat, sessions, reports, news, providers  # noqa: E402
+from routers import health, documents, chat, sessions, reports, news, providers, precedents  # noqa: E402
 
 app.include_router(auth_router)
 app.include_router(health.router)
@@ -131,6 +131,7 @@ app.include_router(voice_call_router)
 app.include_router(autocomplete_router)
 app.include_router(report_router)
 app.include_router(providers.router)
+app.include_router(precedents.router)
 if g._news_chat_available:
     app.include_router(news_chat_router)
 if g._cad_ifc_available:
