@@ -51,8 +51,11 @@
 ## 🔜 Prochaines étapes (dans le périmètre M2)
 
 1. Ouvrir la MR de `feature/m2-agentic-hybrid-search` vers `main`.
-2. Corriger l'encodage à l'ingestion (JSON source en cp1252 → mojibake « pylÃ´ne »
-   dans le texte stocké) — bug de qualité de données, matching non impacté.
+2. (Optionnel) Exposer les précédents aussi en langage naturel via une intention RAG
+   dédiée (l'endpoint `POST /precedents` couvre déjà l'accès programmatique).
+
+> ℹ️ Encodage vérifié OK : stockage et API renvoient de l'UTF-8 correct
+> (« pylône »). Un mojibake vu en test venait d'un pipe Windows, pas du système.
 
 > **Hors périmètre M2** (relève de l'intégration ou de M1) :
 > - Validation de pertinence sur le corpus réel complet → **phase d'intégration**.
