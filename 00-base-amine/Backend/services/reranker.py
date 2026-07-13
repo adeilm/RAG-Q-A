@@ -35,6 +35,27 @@ _RERANKER_MODEL   = os.getenv("RERANKER_MODEL",   "BAAI/bge-reranker-v2-m3")
 _RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "1").strip() != "0"
 _FETCH_K          = int(os.getenv("RERANKER_FETCH_K", "20"))
 
+# ── Hosted GPU rerank provider (prototype) ───────────────────────────────────
+# When RERANK_PROVIDER is "jina" or "cohere" and a key is set, rerank via the
+# hosted API (GPU, ~sub-second) instead of the local CPU cross-encoder.
+# ⚠️  This sends chunk text to a 3rd party — acceptable for the prototype only;
+#     confirm data-governance before using on production/confidential corpora.
+_RERANK_PROVIDER  = os.getenv("RERANK_PROVIDER", "").strip().lower()   # "jina" | "cohere" | ""
+_RERANK_MAX_DOCS  = int(os.getenv("RERANK_MAX_DOCS", "100"))           # cap docs sent per call
+
+_HOSTED_RERANK = {
+    "jina": {
+        "url":     "https://api.jina.ai/v1/rerank",
+        "key_env": "JINA_API_KEY",
+        "model":   os.getenv("RERANK_MODEL", "jina-reranker-v2-base-multilingual"),
+    },
+    "cohere": {
+        "url":     "https://api.cohere.com/v2/rerank",
+        "key_env": "COHERE_API_KEY",
+        "model":   os.getenv("RERANK_MODEL", "rerank-v3.5"),
+    },
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Model state
 # ─────────────────────────────────────────────────────────────────────────────
@@ -125,9 +146,57 @@ def _sigmoid(x: float) -> float:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _rerank_hosted(query: str, chunks: List[Dict], top_k: int) -> List[Dict]:
+    """
+    Rerank via a hosted GPU API (Jina or Cohere). Both expose the same shape:
+      POST {model, query, documents[], top_n} → {results: [{index, relevance_score}]}
+    Raises on any failure so the caller can fall back to the local model.
+    """
+    import requests
+
+    cfg = _HOSTED_RERANK[_RERANK_PROVIDER]
+    key = os.getenv(cfg["key_env"], "").strip()
+    if not key:
+        raise RuntimeError(f"{_RERANK_PROVIDER} rerank selected but {cfg['key_env']} is empty")
+
+    # Cap docs sent (cost/payload): keep the best candidates by vector distance
+    candidates = sorted(chunks, key=lambda c: c.get("distance", 1.0))[:_RERANK_MAX_DOCS]
+    documents = [c["text"][:2000] for c in candidates]
+
+    t0 = time.time()
+    resp = requests.post(
+        cfg["url"],
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": cfg["model"], "query": query, "documents": documents, "top_n": top_k},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    if not results:
+        raise RuntimeError("hosted reranker returned no results")
+
+    ranked: List[Dict] = []
+    for r in results:
+        c = candidates[r["index"]]
+        score = float(r.get("relevance_score", 0.0))
+        c["rerank_score"] = score
+        c["distance"]     = 1.0 - score
+        ranked.append(c)
+
+    print(
+        f"🏆 reranker[{_RERANK_PROVIDER}]: {len(documents)} → {len(ranked)} chunks "
+        f"(top: {ranked[0]['rerank_score']:.3f}, {time.time() - t0:.2f}s)"
+    )
+    return ranked[:top_k]
+
+
 def rerank(query: str, chunks: List[Dict], top_k: int = 5) -> List[Dict]:
     """
-    Re-rank `chunks` by exact relevance to `query` using a cross-encoder.
+    Re-rank `chunks` by exact relevance to `query`.
+
+    Uses a hosted GPU rerank API when RERANK_PROVIDER is configured (fast),
+    otherwise the local CPU cross-encoder. Falls back to local (then to the
+    original order) on any hosted-API failure.
 
     Args:
         query:  The user's question.
@@ -136,13 +205,19 @@ def rerank(query: str, chunks: List[Dict], top_k: int = 5) -> List[Dict]:
 
     Returns:
         The top_k most relevant chunks, each with:
-          - rerank_score : sigmoid-normalized relevance score (0–1)
+          - rerank_score : relevance score (0–1)
           - distance     : overwritten with (1 - rerank_score) so that
                            _is_good_retrieval() in rag_engine works correctly
-        Falls back to the original order if the model is unavailable.
     """
     if not chunks:
         return chunks
+
+    # ── Hosted GPU rerank (prototype) ─────────────────────────────────────────
+    if _RERANK_PROVIDER in _HOSTED_RERANK:
+        try:
+            return _rerank_hosted(query, chunks, top_k)
+        except Exception as e:
+            print(f"⚠️  hosted rerank ({_RERANK_PROVIDER}) failed ({e}) — falling back to local model")
 
     model = _get_cross_encoder()
 
