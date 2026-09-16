@@ -52,7 +52,7 @@ flowchart TB
     subgraph Stores["Data stores"]
         CH[("ChromaDB<br/>semantic vectors")]
         PG[("PostgreSQL<br/>structured facts")]
-        NEO[("Neo4j<br/>knowledge graph")]
+        NEO[("Neo4j<br/>knowledge graph<br/>inherited base · not used by M2")]
     end
 
     subgraph LLM["LLM providers"]
@@ -62,12 +62,18 @@ flowchart TB
 
     UI --> QEP & PEP & UEP
     QEP --> GRAPH
-    GRAPH --> CH & PG & NEO
+    GRAPH --> CH & PG
+    GRAPH -.->|inherited, passthrough| NEO
     GRAPH --> GROQ
     GRAPH --> RER
     PEP --> PG
     UEP --> CH & PG
 ```
+
+> **Scope note:** ChromaDB + PostgreSQL are the stores M2 built on and populates.
+> **Neo4j is inherited from the base project** — M2's ingestion does not populate
+> it and the graph node passes through on M2 data (see §3). It is drawn only for
+> completeness of the running stack.
 
 ---
 
@@ -86,7 +92,7 @@ flowchart TD
     CI -->|analytics| AN["analytics_node"]
     CI -->|rag| RV["retrieve_vector"]
 
-    RV --> RG["retrieve_graph<br/>(Neo4j)"]
+    RV --> RG["retrieve_graph<br/>(Neo4j · inherited · passthrough on M2 data)"]
     RG --> RM["rerank_merge<br/>(cross-encoder / GPU API)"]
     RM --> JP["judge_plan"]
     JP --> SY["synthesise<br/>(+ citations)"]
@@ -245,7 +251,7 @@ flowchart TD
 | Orchestration | LangGraph agentic state machine |
 | Vector store | ChromaDB (`all-MiniLM-L6-v2` embeddings) |
 | Structured store | PostgreSQL 16 (Docker, auto-schema) |
-| Knowledge graph | Neo4j |
+| Knowledge graph | Neo4j *(inherited base — not populated/used by M2)* |
 | LLM | Groq (`llama-3.3-70b-versatile`) |
 | Reranker | Jina / Cohere (GPU) · `bge-reranker-v2-m3` (local fallback) |
 
