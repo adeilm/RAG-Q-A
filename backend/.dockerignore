@@ -11,3 +11,10 @@ Dockerfile
 README.md
 tests/
 *.md
+
+# Local data and outputs
+data/
+.pytest_cache/
+news_cache.json
+pertinence_report.csv
+test_output.txt

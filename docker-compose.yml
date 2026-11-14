@@ -1,3 +1,7 @@
+# Full stack: ChromaDB, PostgreSQL, Neo4j, the API and the frontend.
+# Run from the repo root:  docker compose up -d --build
+name: rag-qa
+
 services:
   chroma:
     image: chromadb/chroma:latest
@@ -6,7 +10,7 @@ services:
     ports:
       - "8001:8000"
 
-  # Structured Database (M2 hybrid search — projets/pylones/notes_de_calcul…)
+  # Structured store for hybrid search (projets, pylones, notes_de_calcul, ...)
   postgres:
     image: postgres:16
     environment:
@@ -17,8 +21,8 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      # Canonical schema (tables + indexes) auto-applied on first boot
-      - ./db/init:/docker-entrypoint-initdb.d:ro
+      # Schema (tables + indexes) applied on first boot
+      - ./backend/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bimlo} -d ${POSTGRES_DB:-bimlo}"]
       interval: 10s
@@ -26,14 +30,14 @@ services:
       retries: 10
       start_period: 20s
 
-  # Graph Database
+  # Graph database (users and chat sessions)
   neo4j:
     image: neo4j:latest
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-localdev123}
     volumes:
       - neo4j_data:/data
     healthcheck:
@@ -43,29 +47,24 @@ services:
       retries: 20
       start_period: 120s
 
-  # Backend API
-  #
-  # Secrets management:
-  #   Development: uses .env file (gitignored, not committed)
-  #   Production:  use Doppler to inject secrets at runtime
-  #     doppler setup --project bimlo-copilot --config prd
-  #     docker compose --profile doppler up -d
-  #
-  api: &api
-    build: .
+  # Backend API. API keys come from backend/.env (gitignored).
+  # The database settings below override backend/.env, so the API always
+  # matches the postgres and neo4j containers above.
+  api:
+    build: ./backend
     ports:
       - "8000:8000"
-    env_file: .env
+    env_file: ./backend/.env
     environment:
-      # Overrides — these must differ from .env or are path-specific
       - CHROMA_HOST=chroma
       - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-localdev123}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-bimlo}
       - POSTGRES_USER=${POSTGRES_USER:-bimlo}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bimlo}
-      - WIKI_USER_AGENT=BimloRAG/1.0
+      - WIKI_USER_AGENT=RAGQA/1.0
       - HF_HOME=/root/.cache/huggingface
       - SENTENCE_TRANSFORMERS_HOME=/root/.cache/huggingface/sentence_transformers
       - HF_HUB_DISABLE_PROGRESS_BARS=1
@@ -75,13 +74,13 @@ services:
       - DATA_DIR=/data
       - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://frontend
     volumes:
-      - .:/app
+      - ./backend:/app
       - hf_cache:/root/.cache/huggingface
       - news_cache:/data/news_cache
-      - ../Frontend/public/favicon.png:/app/assets/favicon.png:ro
-      - ../Frontend/public/favicon.svg:/app/assets/favicon.svg:ro
-      # Real project dataset (gitignored, confidential) → where ingest_json.py reads
-      - ../../DATA_TEST_RAG_BIMLO_pour_Ali/donnees_json:/app/data/donnees_json:ro
+      - ./frontend/public/favicon.png:/app/assets/favicon.png:ro
+      - ./frontend/public/favicon.svg:/app/assets/favicon.svg:ro
+      # Project JSON files (local only, gitignored), read by scripts/ingest_json.py
+      - ./data/projects:/app/data/donnees_json:ro
     depends_on:
       neo4j:
         condition: service_healthy
@@ -90,24 +89,8 @@ services:
       postgres:
         condition: service_healthy
 
-  # Doppler-powered backend (production):
-  #   Injects secrets at runtime instead of using .env file.
-  #   Requires: doppler setup --project bimlo-copilot --config prd
-  api-doppler:
-    <<: *api
-    profiles: ["doppler"]
-    env_file: []  # no .env — secrets come from Doppler
-    environment:
-      - CHROMA_HOST=chroma
-      - NEO4J_URI=bolt://neo4j:7687
-      - DATA_DIR=/data
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://frontend}
-    command: >
-      sh -c "doppler run -- python main.py"
-
-  # Frontend
   frontend:
-    build: ../Frontend
+    build: ./frontend
     ports:
       - "3000:80"
     depends_on:

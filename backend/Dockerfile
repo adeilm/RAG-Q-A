@@ -29,10 +29,7 @@ COPY . .
 #port to expose
 EXPOSE 8000
 
-# Install Doppler CLI for secrets management in production
-RUN curl -Ls https://cli.doppler.com/install.sh | sh
 
 #command to run the application
 # Local dev:          python main.py
-# With Doppler:       doppler run -- python main.py
 CMD ["python", "main.py"]

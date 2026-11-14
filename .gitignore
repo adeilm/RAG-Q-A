@@ -1,82 +1,68 @@
-# ─────────────────────────────────────────────────────────────
-# .gitignore — BIMLO Towermind
-# Secrets et artefacts à NE JAMAIS commiter
-# ─────────────────────────────────────────────────────────────
-
-# ── Secrets / clés API ──────────────────────────────────────
-**/.env
-**/.env.local
-**/.env.development
-**/.env.production
-**/.env.*.local
-# Templates conservés :
-!**/.env.example
-!**/.env.production.example
-!**/.env.frontend.example
-
-# ── Certificats TLS ─────────────────────────────────────────
-certs/
-*.crt
-*.key
+# ── Secrets ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
 *.pem
+*.key
+*.crt
+certs/
 
-# ── Bases de données (données projets confidentielles) ──────
+# ── Data (local only, never commit) ──────────────────────
+/data/
+/backend/data/
+/backend/assets/
+/backend/uploads/
+/backend/reports/
 *.db
 *.db-journal
+*.sqlite
 *.sqlite3
-**/data/chroma/
-**/auth_local.db
-**/bimlo_projects.db
-**/bimlo_chunks.db
-
-# ── Documents projets BIMLO réels (confidentiels) ───────────
-**/uploads/
-**/data/uploads/
+chroma/
+chroma_data/
 *.ifc
+news_cache.json
 
-# ── Sauvegardes ─────────────────────────────────────────────
-backups/
-*.tar.gz
-*.bak
-* - Copie.*
-
-# ── Logs ────────────────────────────────────────────────────
+# ── Test and run outputs ─────────────────────────────────
+pertinence_report.csv
+test_output.txt
 *.log
-**/backend_stdout.log
-**/backend_stderr.log
-**/vite-dev.log
-**/data/logs/
+logs/
 
-# ── Python ──────────────────────────────────────────────────
-**/.venv/
-venv/
-**/__pycache__/
+# ── Python ───────────────────────────────────────────────
+__pycache__/
 *.py[cod]
-**/.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
 .mypy_cache/
 .coverage
 htmlcov/
 
-# ── Node / Frontend ─────────────────────────────────────────
-**/node_modules/
-**/dist/
-**/.vite/
-**/.cache/
+# ── Node / frontend ──────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+.vite/
+.cache/
 *.local
 
-# ── Caches LLM / runtime ────────────────────────────────────
-**/news_cache.json
-**/contact_messages.log
+# ── Docker ───────────────────────────────────────────────
+docker-compose.override.yml
 
-# ── IDE / OS ────────────────────────────────────────────────
+# ── Editors, OS, local tools ─────────────────────────────
 .idea/
 .vscode/*
 !.vscode/extensions.json
 .DS_Store
 Thumbs.db
 *.swp
+*.swo
+*~
+.remember/
 
-# ── Testing Datasets & Logs ─────────────────────────────────
-DATA_TEST_RAG_BIMLO_pour_Ali/
-test_output.txt
-pertinence_report.csv
+# ── Backups ──────────────────────────────────────────────
+*.bak
+*.tmp
+*.tar.gz
+backups/

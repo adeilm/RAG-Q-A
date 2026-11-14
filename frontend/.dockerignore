@@ -1,0 +1,4 @@
+# Keep the Docker build context small. frontend/.env is kept on purpose:
+# Vite bakes the VITE_ variables into the build, and it holds no secrets.
+node_modules
+dist

@@ -5,7 +5,7 @@ In Docker the postgres container auto-runs db/init/*.sql on first boot, so you
 normally don't need this. Use it to (re)apply the schema manually against an
 already-running Postgres (all statements are IF NOT EXISTS, so it's idempotent):
 
-    docker exec backend-api-1 python scripts/init_db.py
+    docker compose exec api python scripts/init_db.py
 
 Env: POSTGRES_* connection (see services/db.py).
 """

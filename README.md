@@ -49,7 +49,7 @@ I checked these by hand on 24 real BIMLO projects. The dataset is confidential a
 
 **Limits**
 
-- I have not measured answer quality on a real test set. The test harness ([`tests/test_pertinence.py`](00-base-amine/Backend/tests/test_pertinence.py), LLM-as-judge with a CSV report) works, but it still runs on placeholder questions.
+- I have not measured answer quality on a real test set. The test harness ([`tests/test_pertinence.py`](backend/tests/test_pertinence.py), LLM-as-judge with a CSV report) works, but it still runs on placeholder questions.
 - Only 7 of the 24 pylons have a height in the source data, so the height filter only helps on those.
 - The hosted reranker sends document text to a third party. It is off by default.
 
@@ -57,16 +57,16 @@ I checked these by hand on 24 real BIMLO projects. The dataset is confidential a
 
 About 1,500 lines across 29 files. My commits are in the history under the author name `dali`.
 
-| File (under `00-base-amine/Backend/`) | What I added |
+| File (under `backend/`) | What I added |
 |---|---|
-| [`services/intent_classifier.py`](00-base-amine/Backend/services/intent_classifier.py) | Extracts `sql_filters` (height, type, project) from the question |
-| [`services/vector_store.py`](00-base-amine/Backend/services/vector_store.py) | `hybrid_search()`: SQL filter first, then a scoped ChromaDB search |
-| [`services/db.py`](00-base-amine/Backend/services/db.py), [`db/init/`](00-base-amine/Backend/db/init) | Moved the structured store from SQLite to PostgreSQL, using the team's shared schema |
-| [`scripts/ingest_json.py`](00-base-amine/Backend/scripts/ingest_json.py) | Loads project JSON files into PostgreSQL and ChromaDB |
-| [`services/document_processor.py`](00-base-amine/Backend/services/document_processor.py) | Page-by-page PDF chunking with page and site metadata |
-| [`services/precedent.py`](00-base-amine/Backend/services/precedent.py), [`routers/precedents.py`](00-base-amine/Backend/routers/precedents.py) | Precedent scoring and the `POST /precedents` endpoint |
-| [`services/reranker.py`](00-base-amine/Backend/services/reranker.py) | Hosted Jina / Cohere reranking with local fallback |
-| [`tests/test_pertinence.py`](00-base-amine/Backend/tests/test_pertinence.py) | LLM-as-judge test harness with a CSV report |
+| [`services/intent_classifier.py`](backend/services/intent_classifier.py) | Extracts `sql_filters` (height, type, project) from the question |
+| [`services/vector_store.py`](backend/services/vector_store.py) | `hybrid_search()`: SQL filter first, then a scoped ChromaDB search |
+| [`services/db.py`](backend/services/db.py), [`db/init/`](backend/db/init) | Moved the structured store from SQLite to PostgreSQL, using the team's shared schema |
+| [`scripts/ingest_json.py`](backend/scripts/ingest_json.py) | Loads project JSON files into PostgreSQL and ChromaDB |
+| [`services/document_processor.py`](backend/services/document_processor.py) | Page-by-page PDF chunking with page and site metadata |
+| [`services/precedent.py`](backend/services/precedent.py), [`routers/precedents.py`](backend/routers/precedents.py) | Precedent scoring and the `POST /precedents` endpoint |
+| [`services/reranker.py`](backend/services/reranker.py) | Hosted Jina / Cohere reranking with local fallback |
+| [`tests/test_pertinence.py`](backend/tests/test_pertinence.py) | LLM-as-judge test harness with a CSV report |
 
 ## Tech stack
 
@@ -83,17 +83,19 @@ About 1,500 lines across 29 files. My commits are in the history under the autho
 
 **You need:** Docker with Docker Compose, a [Groq API key](https://console.groq.com), and project data as JSON files (one file per project, not included).
 
+From the repo root:
+
 ```bash
-cd 00-base-amine/Backend
-cp .env.example .env
-# Edit .env: set at least GROQ_API_KEY and NEO4J_PASSWORD
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+# Edit backend/.env: set at least GROQ_API_KEY
 
 # Start PostgreSQL, ChromaDB, Neo4j, the API and the frontend.
 # The PostgreSQL schema is applied on first boot.
 docker compose up -d --build
 ```
 
-Put your project JSON files in `DATA_TEST_RAG_BIMLO_pour_Ali/donnees_json/` at the repo root (the path is set in `docker-compose.yml`), then load them:
+Put your project JSON files in `data/projects/` (gitignored), then load them:
 
 ```bash
 docker compose exec api python scripts/ingest_json.py
@@ -119,25 +121,27 @@ curl -X POST http://localhost:8000/precedents \
 Run the checks:
 
 ```bash
-docker compose exec api python scripts/test_final_m2.py      # hybrid search smoke test
+docker compose exec api python scripts/smoke_hybrid_search.py   # hybrid search smoke test
 docker compose exec api pytest tests/test_pertinence.py -v -s
 ```
 
-To use the hosted reranker, set `RERANK_PROVIDER=jina` and `JINA_API_KEY` in `.env`.
+To use the hosted reranker, set `RERANK_PROVIDER=jina` and `JINA_API_KEY` in `backend/.env`.
 
 ## Project structure
 
 ```
-00-base-amine/
-├── Backend/
-│   ├── main.py              FastAPI app
-│   ├── routers/             API endpoints (chat, documents, precedents, ...)
-│   ├── services/            RAG engine, vector store, reranker, precedent scoring
-│   ├── db/init/             PostgreSQL schema, applied by Docker on first boot
-│   ├── scripts/             data ingestion and smoke tests
-│   ├── tests/               pytest suites
-│   └── docker-compose.yml
-└── Frontend/                React + TypeScript UI (base app)
+backend/
+├── main.py              FastAPI app
+├── core/                settings, loaded from backend/.env
+├── routers/             API endpoints (chat, documents, precedents, ...)
+├── services/            RAG engine, vector store, reranker, precedent scoring
+├── prompts/             LLM prompt templates
+├── db/init/             PostgreSQL schema, applied by Docker on first boot
+├── scripts/             data ingestion and smoke test
+└── tests/               pytest suites
+frontend/                React + TypeScript UI (base app)
+data/projects/           your project JSON files (gitignored)
+docker-compose.yml       the full stack
 ```
 
 ## Credits

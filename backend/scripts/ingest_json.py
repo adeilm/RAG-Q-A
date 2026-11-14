@@ -9,7 +9,7 @@ For each project JSON:
       tagged with project_name / site_id / doc_type for filtering + citations.
 
 Run inside the api container:
-    docker exec backend-api-1 python scripts/ingest_json.py
+    docker compose exec api python scripts/ingest_json.py
 
 Env:
     JSON_DIR  directory of *.json project files (default /app/data/donnees_json)
