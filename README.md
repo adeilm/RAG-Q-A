@@ -1,158 +1,111 @@
-# RAG Q&A for telecom pylon projects
+# RAG Q&A for construction projects
 
-Ask questions about past telecom pylon projects in plain language, and get answers that cite the site, the document and the page. Built for structural engineers at BIMLO.
+An assistant for construction and architecture teams. Engineers ask questions about their project documents and building models in plain language. They get an answer plus the sources it used: file and page.
 
-> I built this during my internship at BIMLO (2026). My part is the retrieval layer: hybrid search, project locking, page-level citations and precedent ranking. It runs on top of a base RAG application written by Mohamed Amin Helali at BIMLO. See [What I built](#what-i-built) and [Credits](#credits).
+The goal is a SaaS product for construction companies. See [Status](#status) for where it stands today.
 
-<!-- TODO: add a screenshot or GIF of a question answered with cited sources -->
+## What it does
+
+- **Answers questions about project documents** (PDF, Word, text, images) and lists the sources behind each answer. Drawings and photos inside documents are described by a vision model, so their content is searchable too.
+- **Reads BIM and CAD files.** You can ask about an IFC model's elements, storeys, materials and quantities. CAD drawings (DXF, with basic DWG and STEP support) are converted to IFC on upload. Models open in a 3D viewer in the browser.
+- **Applies exact filters from the question.** "Projects with a structure of 30 m or more" becomes a SQL query on the project database. The text search then runs only inside the matching projects. If no project matches, it returns nothing instead of pulling text from other projects.
+- **Finds the closest past project.** `POST /precedents` ranks past projects by structure type, height, design standards and materials, and returns a sub-score for each criterion.
+- **Also included:** charts built from document data, PDF and Markdown reports, voice input and a voice call mode, a news page, user accounts with separate document collections, and an admin page. The interface is in English, French and Arabic.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    Q["Question"] --> C["LLM intent classifier<br/>extracts filters:<br/>height, type, project"]
-    C -->|filters| P[("PostgreSQL<br/>projects, pylons")]
-    P -->|matching projects| V[("ChromaDB<br/>vector search")]
-    C -->|no filters| V
-    V --> R["Reranker<br/>Jina / Cohere API<br/>or local bge model"]
-    R --> S["LLM answer<br/>with citations<br/>(site, doc, page)"]
+    Q["Question"] --> C["Intent classifier (LLM)<br/>picks a route,<br/>extracts filters"]
+    C -->|"filters: height,<br/>structure type, project"| P[("PostgreSQL<br/>projects, structures")]
+    P -->|"matching projects"| V[("ChromaDB<br/>vector search")]
+    C -->|"no filters"| V
+    V --> G[("Neo4j graph<br/>only for relationship<br/>questions")]
+    G --> R["Reranker<br/>local bge model<br/>or Jina / Cohere API"]
+    R -.->|"weak results:<br/>rewrite the query"| V
+    R --> J["Answer step<br/>judge plans, LLM writes,<br/>judge checks"]
+    J --> A["Answer with sources<br/>(file, page)"]
+    C -.->|"other routes"| O["Direct answer, chart,<br/>report, CAD / IFC"]
 ```
 
-A second endpoint, `POST /precedents`, skips the LLM. It scores every past project against the criteria you give it and returns them ranked.
+1. **Classify.** An LLM reads the question, picks a route (document Q&A, direct answer, chart, report, CAD and others) and extracts filters such as minimum height, structure type or project code.
+2. **Filter, then search.** With filters, PostgreSQL returns the matching projects and ChromaDB searches only their text chunks. Without filters, ChromaDB searches every document the user can see.
+3. **Add graph context.** When the question asks how things are connected, the app writes a Cypher query against a Neo4j graph. The graph holds entities (storeys, rooms, walls, beams, materials, standards and more) extracted from the uploaded documents.
+4. **Rerank.** A cross-encoder scores each chunk against the question. It runs locally (`bge-reranker-v2-m3`) or through the Jina or Cohere API, and falls back to the local model if the API call fails. If the results are still weak, the query is rewritten and searched again.
+5. **Answer.** An LLM judge plans the answer, the LLM writes it with sources, and the judge checks it. A weak answer gets one more attempt.
 
-## The problem
+Uploaded files go through their own pipeline. PDFs are split page by page, so every chunk keeps its page number. Chunks are stored in ChromaDB and entities in Neo4j.
 
-Engineers often solve a question that a past project already answered. The answer sits somewhere in old calculation notes and plans.
-
-Plain vector search finds text *about* "a 30 m pylon". It cannot reliably answer "which projects have a pylon of 30 m or more?". That is an exact filter, and exact filters are a database job.
-
-## My approach
-
-- **Filters from plain language.** The intent classifier (an LLM call) turns `"mât braconné de 30m"` into `{"hauteur_min": 30, "type_pylone": "mât braconné"}`.
-- **Database first, then vectors.** PostgreSQL applies the filters and returns the matching projects. ChromaDB then searches only inside those projects. If no project matches, the search returns nothing instead of answering from the wrong project.
-- **Page-level citations.** PDFs are split page by page, so every chunk keeps its page number and site ID. The answer cites both.
-- **Closest past project.** `POST /precedents` ranks projects by pylon type, height difference, and overlap of standards and materials. It returns each sub-score, so an engineer can see why a project ranked high.
-- **Faster reranking.** The reranker can call a hosted GPU API (Jina or Cohere). If that call fails, it falls back to the local `bge-reranker-v2-m3` model.
-
-## Results
-
-I checked these by hand on 24 real BIMLO projects. The dataset is confidential and is not in this repo.
-
-| Check | Result |
-|---|---|
-| Question names one project | Search locked to that 1 project |
-| Question names a pylon type | Search scoped to the 11 matching projects |
-| Question names a project that does not exist | 0 chunks returned, nothing pulled from other projects |
-| Precedent query: 36 m, triangular | Exact match scored 1.0, a 24 m lattice tower 0.7 |
-| Rerank step: local CPU vs Jina API | 150 to 230 s → 0.54 s |
-| Full query: local CPU vs Jina API | about 230 s → 11.8 s |
-
-**Limits**
-
-- I have not measured answer quality on a real test set. The test harness ([`tests/test_pertinence.py`](backend/tests/test_pertinence.py), LLM-as-judge with a CSV report) works, but it still runs on placeholder questions.
-- Only 7 of the 24 pylons have a height in the source data, so the height filter only helps on those.
-- The hosted reranker sends document text to a third party. It is off by default.
-
-## What I built
-
-About 1,500 lines across 29 files. My commits are in the history under the author name `dali`.
-
-| File (under `backend/`) | What I added |
-|---|---|
-| [`services/intent_classifier.py`](backend/services/intent_classifier.py) | Extracts `sql_filters` (height, type, project) from the question |
-| [`services/vector_store.py`](backend/services/vector_store.py) | `hybrid_search()`: SQL filter first, then a scoped ChromaDB search |
-| [`services/db.py`](backend/services/db.py), [`db/init/`](backend/db/init) | Moved the structured store from SQLite to PostgreSQL, using the team's shared schema |
-| [`scripts/ingest_json.py`](backend/scripts/ingest_json.py) | Loads project JSON files into PostgreSQL and ChromaDB |
-| [`services/document_processor.py`](backend/services/document_processor.py) | Page-by-page PDF chunking with page and site metadata |
-| [`services/precedent.py`](backend/services/precedent.py), [`routers/precedents.py`](backend/routers/precedents.py) | Precedent scoring and the `POST /precedents` endpoint |
-| [`services/reranker.py`](backend/services/reranker.py) | Hosted Jina / Cohere reranking with local fallback |
-| [`tests/test_pertinence.py`](backend/tests/test_pertinence.py) | LLM-as-judge test harness with a CSV report |
+LLM calls go through a list of providers (Cloudflare Workers AI, OpenRouter, Groq, NVIDIA). If one fails or runs out of quota, the next one takes over.
 
 ## Tech stack
 
-- **API:** Python, FastAPI
-- **Agent graph:** LangGraph (from the base app)
-- **Vector store:** ChromaDB with `all-MiniLM-L6-v2` embeddings
-- **Structured store:** PostgreSQL 16
-- **LLM:** Groq, Llama 3.3 70B
-- **Reranker:** `bge-reranker-v2-m3` locally, Jina or Cohere as a hosted option
-- **Tooling:** Docker Compose, pytest
-- **From the base app:** React + TypeScript + Vite frontend, Neo4j for users and sessions
+- **Backend:** Python 3.11, FastAPI, LangGraph
+- **Search:** ChromaDB with `all-MiniLM-L6-v2` embeddings, PostgreSQL 16, Neo4j
+- **Reranking:** `bge-reranker-v2-m3` locally, Jina or Cohere as a hosted option
+- **LLMs:** Groq (Llama 3.3 70B, Llama 3.1 8B), Cloudflare Workers AI, OpenRouter, NVIDIA
+- **BIM and documents:** IfcOpenShell, ezdxf, xeokit (3D viewer), pdfplumber, python-docx, ReportLab
+- **Voice:** Whisper on Groq (speech to text), ElevenLabs (text to speech)
+- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, Chart.js, i18next
+- **Tooling:** Docker Compose, pytest, Vitest, Playwright
 
 ## How to run it
 
-**You need:** Docker with Docker Compose, a [Groq API key](https://console.groq.com), and project data as JSON files (one file per project, not included).
+**You need:** Docker with Docker Compose and a [Groq API key](https://console.groq.com). For the structured search you also need project data as JSON files, one file per project. No data is included in this repo.
 
 From the repo root:
 
 ```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
-# Edit backend/.env: set at least GROQ_API_KEY
+# Edit backend/.env and set GROQ_API_KEY. Every other key is optional.
 
-# Start PostgreSQL, ChromaDB, Neo4j, the API and the frontend.
-# The PostgreSQL schema is applied on first boot.
+# Starts ChromaDB, PostgreSQL, Neo4j, the API and the frontend.
 docker compose up -d --build
 ```
 
-Put your project JSON files in `data/projects/` (gitignored), then load them:
+The PostgreSQL schema is applied on first boot. The API waits for Neo4j to pass its health check, so the first start can take a few minutes. The local reranker model is downloaded on first use and cached in a Docker volume.
+
+Load your project data. Put the JSON files in `data/projects/` (gitignored), then run:
 
 ```bash
 docker compose exec api python scripts/ingest_json.py
 ```
 
-Try it:
-
-```bash
-# Ask a question. Hybrid search starts when the question contains filters.
-curl -X POST http://localhost:8000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Quels projets ont un mât braconné de 30 m ?", "session_id": "global"}'
-
-# Rank past projects by closeness
-curl -X POST http://localhost:8000/precedents \
-  -H "Content-Type: application/json" \
-  -d '{"hauteur_m": 36, "type_pylone": "triangulaire", "top_n": 5}'
-```
+Open the app:
 
 - Frontend: http://localhost:3000
 - API docs: http://localhost:8000/docs
 
-Run the checks:
+Or call the API directly:
 
 ```bash
-docker compose exec api python scripts/smoke_hybrid_search.py   # hybrid search smoke test
-docker compose exec api pytest tests/test_pertinence.py -v -s
+# Ask a question. Filters in the question, such as a minimum height, trigger the structured search.
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Which projects have a structure of 30 m or more?", "session_id": "global"}'
+
+# Rank past projects by how close they are to the criteria
+curl -X POST http://localhost:8000/precedents \
+  -H "Content-Type: application/json" \
+  -d '{"hauteur_m": 30, "normes": ["EN 1993-1-1"], "materiaux": ["S355"], "top_n": 5}'
 ```
 
-To use the hosted reranker, set `RERANK_PROVIDER=jina` and `JINA_API_KEY` in `backend/.env`.
+To use the hosted reranker, set `RERANK_PROVIDER=jina` and `JINA_API_KEY` in `backend/.env`. The hosted API receives the text of your documents, so it is off by default.
 
-## Project structure
+Stop everything with `docker compose down`.
 
-```
-backend/
-├── main.py              FastAPI app
-├── core/                settings, loaded from backend/.env
-├── routers/             API endpoints (chat, documents, precedents, ...)
-├── services/            RAG engine, vector store, reranker, precedent scoring
-├── prompts/             LLM prompt templates
-├── db/init/             PostgreSQL schema, applied by Docker on first boot
-├── scripts/             data ingestion and smoke test
-└── tests/               pytest suites
-frontend/                React + TypeScript UI (base app)
-data/projects/           your project JSON files (gitignored)
-docker-compose.yml       the full stack
-```
+## Status
+
+- It runs as a self-hosted app with Docker Compose. Accounts for multiple companies and billing are not built yet.
+- The project database, the search filters and several prompts still target a single structure type (telecom towers), because that is what the first dataset contained. Making them work for buildings in general is the next step.
 
 ## Credits
 
-- **Base RAG application** (FastAPI backend, React frontend, LangGraph agent graph, auth, reports): Mohamed Amin Helali, BIMLO.
-- **Project, data and supervision:** BIMLO.
-- **Retrieval layer** described above: me.
+- **Base RAG application** (FastAPI backend, React frontend, LangGraph agent graph, auth, reports): Mohamed Amin Helali.
+- **Retrieval layer** (hybrid search, project filtering, page-level citations, precedent ranking, hosted reranker): me.
 
-## License
-
-No open-source license. This code was written during an internship at BIMLO and is shown here as a portfolio piece. Please do not reuse it without permission.
+No open-source license. Please do not reuse this code without permission.
 
 ---
 
